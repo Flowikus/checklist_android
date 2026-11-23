@@ -1,0 +1,18 @@
+[project]
+name = "checklist-android"
+version = "0.1.0"
+description = "Android-приложение для трекинга чек-листов на неделю, месяц и год"
+requires-python = ">=3.11"
+dependencies = [
+    "flet>=1.0.0",
+    "flet-charts",
+]
+
+[tool.flet]
+org = "com.example"
+product = "Чек-листы"
+company = "Flowi Team"
+copyright = "2026"
+
+[tool.flet.android]
+package_name = "com.example.checklist"
