@@ -1,9 +1,11 @@
 import flet as ft
 from core.constants.colors import AppColors
+from core.constants.strings import AppStrings
 from core.database.repository import ChecklistRepository
 from core.utils.period_helper import PeriodHelper
 from ui.components.checklist_card import ChecklistCard
 from ui.components.analytics_panel import AnalyticsPanel
+from ui.components.week_day_selector import WeekDaySelector
 
 
 class PeriodView(ft.Container):
@@ -13,7 +15,14 @@ class PeriodView(ft.Container):
         self.period_type = period_type
         self.current_period_id = PeriodHelper.get_current_period_id(period_type)
 
-        # Заголовок периода (например, "Неделя №48 (2026)")
+        # Для вкладки "Неделя" по умолчанию выбираем сегодняшний день недели (1..7)
+        self.selected_day_of_week: int | None = (
+            PeriodHelper.get_current_day_of_week()
+            if period_type == AppStrings.PERIOD_WEEK
+            else None
+        )
+
+        # Заголовок периода
         self.header_title = ft.Text(
             PeriodHelper.get_period_display_name(period_type),
             size=22,
@@ -21,7 +30,7 @@ class PeriodView(ft.Container):
             color=AppColors.TEXT_PRIMARY,
         )
 
-        # Бейдж общего прогресса ("Выполнено: 2 из 5")
+        # Бейдж общего прогресса ("2 из 5")
         self.progress_badge = ft.Container(
             bgcolor=AppColors.PRIMARY_LIGHT,
             padding=ft.Padding.symmetric(horizontal=12, vertical=6),
@@ -43,13 +52,24 @@ class PeriodView(ft.Container):
             border_radius=3,
         )
 
-        # Контейнер для будущего блока графиков (Этап 7)
+        # Селектор дней недели (активен только на вкладке "Неделя")
+        self.week_day_selector = WeekDaySelector(
+            selected_days=[self.selected_day_of_week or 1],
+            allow_multiple=False,
+            on_change=self._on_week_day_changed,
+        )
+        self.week_day_container = ft.Container(
+            content=self.week_day_selector,
+            visible=(self.period_type == AppStrings.PERIOD_WEEK),
+            padding=ft.Padding.symmetric(vertical=2),
+        )
+
+        # Блок графиков
         self.analytics_panel = AnalyticsPanel(
             repo=self.repo,
             period_type=self.period_type,
             period_identifier=self.current_period_id,
         )
-
 
         # Список карточек задач
         self.tasks_column = ft.Column(
@@ -68,12 +88,19 @@ class PeriodView(ft.Container):
                     controls=[self.header_title, self.progress_badge],
                 ),
                 self.progress_bar,
+                self.week_day_container,
                 self.analytics_panel,
                 self.tasks_column,
             ],
         )
 
         self.refresh_data(should_update=False)
+
+    def _on_week_day_changed(self, selected: list[int]) -> None:
+        if selected:
+            self.selected_day_of_week = selected[0]
+            self.refresh_data(should_update=True)
+
 
     def refresh_data(self, should_update: bool = True) -> None:
         """Перезагружает задачи и пересчитывает прогресс периода."""
@@ -84,11 +111,17 @@ class PeriodView(ft.Container):
         tasks = self.repo.get_period_tasks_with_progress(
             period_type=self.period_type,
             period_identifier=self.current_period_id,
+            day_of_week=self.selected_day_of_week,
         )
 
         self.tasks_column.controls.clear()
 
         if not tasks:
+            empty_msg = (
+                "На этот день недели задач пока нет"
+                if self.period_type == AppStrings.PERIOD_WEEK
+                else "Задач на этот период пока нет"
+            )
             self.tasks_column.controls.append(
                 ft.Container(
                     alignment=ft.Alignment.CENTER,
@@ -99,7 +132,7 @@ class PeriodView(ft.Container):
                         controls=[
                             ft.Icon(ft.Icons.TASK_ALT, size=48, color=AppColors.DIVIDER),
                             ft.Text(
-                                "Задач на этот период пока нет",
+                                empty_msg,
                                 size=15,
                                 color=AppColors.TEXT_SECONDARY,
                             ),
@@ -130,11 +163,17 @@ class PeriodView(ft.Container):
 
     def _on_task_progress_changed(self, task_id: int, is_completed: bool, numeric_value: float) -> None:
         """Сохраняет изменение в БД и обновляет верхний индикатор прогресса."""
+        log_day = (
+            (self.selected_day_of_week or 0)
+            if self.period_type == AppStrings.PERIOD_WEEK
+            else 0
+        )
         self.repo.save_task_progress(
             checklist_id=task_id,
             period_identifier=self.current_period_id,
             is_completed=is_completed,
             numeric_value=numeric_value,
+            day_of_week=log_day,
         )
         self._update_summary_header(should_update=True)
 
@@ -142,6 +181,7 @@ class PeriodView(ft.Container):
         stats = self.repo.get_period_summary_stats(
             period_type=self.period_type,
             period_identifier=self.current_period_id,
+            day_of_week=self.selected_day_of_week,
         )
         total = stats["total"]
         completed = stats["completed"]

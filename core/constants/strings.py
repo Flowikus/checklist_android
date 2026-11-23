@@ -2,15 +2,20 @@ class AppStrings:
     APP_TITLE = "Чек-листы"
 
     # Вкладки навигации
+    TAB_DAY = "День"
     TAB_WEEK = "Неделя"
     TAB_MONTH = "Месяц"
     TAB_YEAR = "Год"
     TAB_SETTINGS = "Настройки"
 
     # Периоды (ключи для БД)
+    PERIOD_DAY = "day"
     PERIOD_WEEK = "week"
     PERIOD_MONTH = "month"
     PERIOD_YEAR = "year"
+
+    # Дни недели
+    DAYS_SHORT = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
     # Диалог ротации периода
     RENEWAL_TITLE = "Начался новый период"

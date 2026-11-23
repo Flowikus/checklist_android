@@ -17,17 +17,16 @@ def main(page: ft.Page):
     page.title = AppStrings.APP_TITLE
     page.theme = get_app_theme()
     page.theme_mode = ft.ThemeMode.LIGHT
-    #page.window.width = 400
-    #page.window.height = 800
 
-    # Инициализация всех 4 экранов
+    # Инициализация всех 5 экранов
+    day_view = PeriodView(repo=repo, period_type=AppStrings.PERIOD_DAY)
     week_view = PeriodView(repo=repo, period_type=AppStrings.PERIOD_WEEK)
     month_view = PeriodView(repo=repo, period_type=AppStrings.PERIOD_MONTH)
     year_view = PeriodView(repo=repo, period_type=AppStrings.PERIOD_YEAR)
     settings_view = SettingsView(page=page, repo=repo)
 
-    views = [week_view, month_view, year_view, settings_view]
-    body_container = ft.Container(content=week_view, expand=True)
+    views = [day_view, week_view, month_view, year_view, settings_view]
+    body_container = ft.Container(content=day_view, expand=True)
 
     def on_nav_change(e: ft.ControlEvent):
         idx = int(e.control.selected_index)
@@ -43,7 +42,7 @@ def main(page: ft.Page):
         body_container.update()
 
     def switch_to_settings(filter_period: str):
-        page.navigation_bar.selected_index = 3
+        page.navigation_bar.selected_index = 4
         settings_view.set_period(filter_period)
         body_container.content = settings_view
         page.update()
@@ -59,14 +58,16 @@ def main(page: ft.Page):
             show_renewal_dialog(
                 page=page,
                 repo=repo,
-                period_type=pending_periods,
+                period_type=pending_periods[0],
                 on_edit_requested=switch_to_settings,
                 on_keep_requested=refresh_active_period_view,
             )
 
+
     def on_lifecycle_change(e: ft.AppLifecycleStateChangeEvent):
         if e.state == ft.AppLifecycleState.RESUME:
             check_renewals()
+            refresh_active_period_view()
 
     page.on_lifecycle_state_change = on_lifecycle_change
 
@@ -74,6 +75,11 @@ def main(page: ft.Page):
         selected_index=0,
         on_change=on_nav_change,
         destinations=[
+            ft.NavigationBarDestination(
+                icon=ft.Icons.TODAY_OUTLINED,
+                selected_icon=ft.Icons.TODAY,
+                label=AppStrings.TAB_DAY,
+            ),
             ft.NavigationBarDestination(
                 icon=ft.Icons.VIEW_WEEK_OUTLINED,
                 selected_icon=ft.Icons.VIEW_WEEK,

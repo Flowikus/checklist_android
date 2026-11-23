@@ -3,21 +3,23 @@ import flet as ft
 from core.constants.colors import AppColors
 from core.constants.strings import AppStrings
 from core.database.repository import ChecklistRepository
+from ui.components.week_day_selector import WeekDaySelector
 
 
 class SettingsView(ft.Container):
-    def __init__(self, page: ft.Page, repo: ChecklistRepository, initial_period: str = AppStrings.PERIOD_WEEK):
+    def __init__(self, page: ft.Page, repo: ChecklistRepository, initial_period: str = AppStrings.PERIOD_DAY):
         super().__init__(expand=True, padding=ft.Padding.only(left=16, right=16, top=12))
         self.app_page = page
         self.repo = repo
         self.selected_period = initial_period
 
-        # Переключатель периодов (Неделя / Месяц / Год)
+        # Переключатель периодов (День / Неделя / Месяц / Год)
         self.period_selector = ft.SegmentedButton(
             selected=[self.selected_period],
             allow_multiple_selection=False,
             on_change=self._on_period_change,
             segments=[
+                ft.Segment(value=AppStrings.PERIOD_DAY, label=ft.Text(AppStrings.TAB_DAY)),
                 ft.Segment(value=AppStrings.PERIOD_WEEK, label=ft.Text(AppStrings.TAB_WEEK)),
                 ft.Segment(value=AppStrings.PERIOD_MONTH, label=ft.Text(AppStrings.TAB_MONTH)),
                 ft.Segment(value=AppStrings.PERIOD_YEAR, label=ft.Text(AppStrings.TAB_YEAR)),
@@ -65,7 +67,6 @@ class SettingsView(ft.Container):
 
         self.load_tasks(should_update=False)
 
-
     def set_period(self, period_type: str) -> None:
         """Позволяет программно переключить вкладку (например, из диалога ротации)."""
         self.selected_period = period_type
@@ -111,10 +112,22 @@ class SettingsView(ft.Container):
             except RuntimeError:
                 pass
 
+    @staticmethod
+    def _format_days_badge(days_raw: str | None) -> str:
+        if not days_raw:
+            return "Все дни"
+        nums = [int(d) for d in days_raw.split(",") if d.isdigit()]
+        if len(nums) == 7:
+            return "Все дни"
+        return ", ".join(AppStrings.DAYS_SHORT[n - 1] for n in sorted(nums) if 1 <= n <= 7)
 
     def _build_task_card(self, item: dict[str, Any]) -> ft.Card:
         """Формирует карточку настройки задачи с кнопками редактирования и удаления."""
         subtitle_parts = []
+        if item["period_type"] == AppStrings.PERIOD_WEEK:
+            days_text = self._format_days_badge(item.get("days_of_week"))
+            subtitle_parts.append(f"[{days_text}]")
+
         if item["has_numeric_input"]:
             unit = item["unit_name"] or "ед."
             if item["target_value"]:
@@ -173,12 +186,33 @@ class SettingsView(ft.Container):
     def _open_task_dialog(self, item: dict[str, Any] | None = None) -> None:
         """Открывает диалог создания новой или редактирования существующей задачи."""
         is_edit = item is not None
+        is_week = self.selected_period == AppStrings.PERIOD_WEEK
 
         title_field = ft.TextField(
             label=AppStrings.FIELD_TITLE_LABEL,
             value=item["title"] if is_edit else "",
             border_radius=10,
             autofocus=True,
+        )
+
+        # Выбор дней недели (виден только на вкладке "Неделя")
+        initial_days = list(range(1, 8))
+        if is_edit and item.get("days_of_week"):
+            initial_days = [int(x) for x in item["days_of_week"].split(",") if x.isdigit()]
+
+        days_selector = WeekDaySelector(selected_days=initial_days, allow_multiple=True)
+        days_section = ft.Column(
+            visible=is_week,
+            spacing=6,
+            controls=[
+                ft.Text(
+                    "Дни недели для этой задачи:",
+                    size=13,
+                    weight=ft.FontWeight.W_500,
+                    color=AppColors.TEXT_SECONDARY,
+                ),
+                days_selector,
+            ],
         )
 
         unit_field = ft.TextField(
@@ -234,6 +268,10 @@ class SettingsView(ft.Container):
                     dialog.update()
                     return
 
+            days_str = None
+            if is_week:
+                days_str = days_selector.get_selected_days_str()
+
             if is_edit:
                 self.repo.update_checklist_item(
                     item_id=item["id"],
@@ -242,6 +280,7 @@ class SettingsView(ft.Container):
                     has_numeric_input=has_num,
                     unit_name=unit_val,
                     target_value=target_val,
+                    days_of_week=days_str,
                 )
             else:
                 self.repo.create_checklist_item(
@@ -250,6 +289,7 @@ class SettingsView(ft.Container):
                     has_numeric_input=has_num,
                     unit_name=unit_val,
                     target_value=target_val,
+                    days_of_week=days_str,
                 )
 
             self.app_page.pop_dialog()
@@ -264,12 +304,13 @@ class SettingsView(ft.Container):
                 color=AppColors.TEXT_PRIMARY,
             ),
             content=ft.Container(
-                width=320,
+                width=330,
                 content=ft.Column(
                     tight=True,
                     spacing=12,
                     controls=[
                         title_field,
+                        days_section,
                         numeric_checkbox,
                         numeric_fields_container,
                     ],
