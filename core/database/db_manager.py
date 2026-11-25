@@ -1,10 +1,10 @@
 import os
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 
 def get_db_path() -> str:
-    """Возвращает безопасный путь к файлу БД для Android и ПК."""
     storage_dir = os.getenv("FLET_APP_STORAGE_DATA")
     if storage_dir:
         base_path = Path(storage_dir)
@@ -26,7 +26,7 @@ class DatabaseManager:
         return conn
 
     def init_db(self) -> None:
-        """Создает таблицы при первом запуске или безопасно мигрирует старую БД до v4."""
+        """Создает таблицы при первом запуске или безопасно мигрирует БД до v5."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
@@ -36,16 +36,14 @@ class DatabaseManager:
             table_exists = cursor.fetchone() is not None
 
             if not table_exists:
-                self._create_v4_tables(cursor)
+                self._create_v5_tables(cursor)
             else:
                 cursor.execute("PRAGMA table_info(checklists);")
                 columns = [row["name"] for row in cursor.fetchall()]
 
-                # Если база совсем старая (v1)
                 if "days_of_week" not in columns:
-                    self._migrate_v1_to_v4(cursor)
+                    self._migrate_v1_to_v5(cursor)
                 else:
-                    # Миграция с v2/v3 до v4
                     if "goal_type" not in columns:
                         cursor.execute(
                             "ALTER TABLE checklists ADD COLUMN goal_type TEXT NOT NULL DEFAULT 'numeric';"
@@ -54,38 +52,47 @@ class DatabaseManager:
                         cursor.execute(
                             "ALTER TABLE checklists ADD COLUMN linked_goal_ids TEXT;"
                         )
-                        # Переносим старые связи по goal_key в прямые ID целей
-                        if "goal_key" in columns:
-                            self._migrate_goal_keys_to_ids(cursor)
+
+                # Миграция v5: добавляем reward_claimed в checklist_logs и таблицу plant_state
+                cursor.execute("PRAGMA table_info(checklist_logs);")
+                log_cols = [row["name"] for row in cursor.fetchall()]
+                if "reward_claimed" not in log_cols:
+                    cursor.execute(
+                        "ALTER TABLE checklist_logs ADD COLUMN reward_claimed INTEGER NOT NULL DEFAULT 0;"
+                    )
+
+                self._create_plant_table(cursor)
 
             conn.commit()
 
-    def _migrate_goal_keys_to_ids(self, cursor: sqlite3.Cursor) -> None:
-        """Связывает существующие дневные/недельные задачи с целями месяца/года по старому goal_key."""
+    def _create_plant_table(self, cursor: sqlite3.Cursor) -> None:
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS plant_state (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                plant_name TEXT NOT NULL DEFAULT 'Росток',
+                coins INTEGER NOT NULL DEFAULT 30,
+                xp INTEGER NOT NULL DEFAULT 0,
+                hydration INTEGER NOT NULL DEFAULT 80,
+                last_decay_date TEXT NOT NULL,
+                care_date TEXT NOT NULL,
+                sun_count_today INTEGER NOT NULL DEFAULT 0,
+                water_count_today INTEGER NOT NULL DEFAULT 0,
+                fertilize_count_today INTEGER NOT NULL DEFAULT 0,
+                last_perfect_day_date TEXT
+            );
+        """)
         cursor.execute(
-            "SELECT id, goal_key FROM checklists WHERE period_type IN ('month', 'year') AND is_active = 1;"
+            """
+            INSERT OR IGNORE INTO plant_state (
+                id, plant_name, coins, xp, hydration, last_decay_date, care_date
+            )
+            VALUES (1, 'Росток', 30, 0, 80, ?, ?);
+            """,
+            (today_str, today_str),
         )
-        goals = cursor.fetchall()
-        key_to_ids: dict[str, list[str]] = {}
-        for g in goals:
-            g_key = (g["goal_key"] or "").strip().lower()
-            if g_key:
-                key_to_ids.setdefault(g_key, []).append(str(g["id"]))
 
-        cursor.execute(
-            "SELECT id, goal_key FROM checklists WHERE period_type IN ('day', 'week');"
-        )
-        tasks = cursor.fetchall()
-        for t in tasks:
-            t_key = (t["goal_key"] or "").strip().lower()
-            if t_key and t_key in key_to_ids:
-                linked_str = ",".join(key_to_ids[t_key])
-                cursor.execute(
-                    "UPDATE checklists SET linked_goal_ids = ? WHERE id = ?;",
-                    (linked_str, t["id"]),
-                )
-
-    def _create_v4_tables(self, cursor: sqlite3.Cursor) -> None:
+    def _create_v5_tables(self, cursor: sqlite3.Cursor) -> None:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS checklists (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,6 +118,7 @@ class DatabaseManager:
                 log_date TEXT NOT NULL,
                 is_completed INTEGER NOT NULL DEFAULT 0,
                 numeric_value REAL NOT NULL DEFAULT 0.0,
+                reward_claimed INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (checklist_id) REFERENCES checklists (id) ON DELETE CASCADE,
                 UNIQUE(checklist_id, period_identifier, day_of_week)
             );
@@ -123,14 +131,16 @@ class DatabaseManager:
             );
         """)
 
-    def _migrate_v1_to_v4(self, cursor: sqlite3.Cursor) -> None:
+        self._create_plant_table(cursor)
+
+    def _migrate_v1_to_v5(self, cursor: sqlite3.Cursor) -> None:
         cursor.execute("PRAGMA foreign_keys = OFF;")
 
         cursor.execute("ALTER TABLE checklists RENAME TO checklists_old;")
         cursor.execute("ALTER TABLE checklist_logs RENAME TO checklist_logs_old;")
         cursor.execute("ALTER TABLE period_states RENAME TO period_states_old;")
 
-        self._create_v4_tables(cursor)
+        self._create_v5_tables(cursor)
 
         cursor.execute("""
             INSERT INTO checklists (
@@ -155,11 +165,11 @@ class DatabaseManager:
         cursor.execute("""
             INSERT INTO checklist_logs (
                 id, checklist_id, period_identifier, day_of_week,
-                log_date, is_completed, numeric_value
+                log_date, is_completed, numeric_value, reward_claimed
             )
             SELECT
                 id, checklist_id, period_identifier, 0,
-                log_date, is_completed, numeric_value
+                log_date, is_completed, numeric_value, is_completed
             FROM checklist_logs_old;
         """)
 

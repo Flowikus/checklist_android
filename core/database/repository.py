@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Any
 from core.database.db_manager import DatabaseManager
+from core.constants.plant_config import PlantConfig
 
 
 class ChecklistRepository:
@@ -140,6 +141,7 @@ class ChecklistRepository:
         with self.db.get_connection() as conn:
             conn.execute("DELETE FROM checklists WHERE id = ?", (item_id,))
             conn.commit()
+
     # --- ЕДИНЫЙ СПИСОК ЗАДАЧ НА ВЫБРАННЫЙ ДЕНЬ (ДНЕВНЫЕ + НЕДЕЛЬНЫЕ) ---
 
     def get_tasks_for_date(self, date_str: str, day_of_week: int) -> list[dict[str, Any]]:
@@ -186,35 +188,6 @@ class ChecklistRepository:
 
         return tasks
 
-    def save_daily_task_progress(
-        self,
-        checklist_id: int,
-        date_str: str,
-        is_completed: bool,
-        numeric_value: float = 0.0,
-    ) -> None:
-        """Сохраняет отметку или число для задачи на выбранную дату ('YYYY-MM-DD')."""
-        with self.db.get_connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO checklist_logs (
-                    checklist_id, period_identifier, day_of_week, log_date, is_completed, numeric_value
-                )
-                VALUES (?, ?, 0, ?, ?, ?)
-                ON CONFLICT(checklist_id, period_identifier, day_of_week) DO UPDATE SET
-                    log_date = excluded.log_date,
-                    is_completed = excluded.is_completed,
-                    numeric_value = excluded.numeric_value
-                """,
-                (
-                    checklist_id,
-                    date_str,
-                    date_str,
-                    1 if is_completed else 0,
-                    float(numeric_value),
-                ),
-            )
-            conn.commit()
 
     # --- ЦЕЛИ МЕСЯЦА И ГОДА (НАКОПИТЕЛЬНЫЕ И ЧЕК-БОКСЫ) ---
 
@@ -289,29 +262,6 @@ class ChecklistRepository:
 
                 result.append(item)
             return result
-
-    def save_boolean_goal_progress(
-        self,
-        goal_id: int,
-        period_identifier: str,
-        is_completed: bool,
-    ) -> None:
-        """Сохраняет отметку выполнения для разовой цели-чекбокса ('Прочитать книгу' и т.п.)."""
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        with self.db.get_connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO checklist_logs (
-                    checklist_id, period_identifier, day_of_week, log_date, is_completed, numeric_value
-                )
-                VALUES (?, ?, 0, ?, ?, 0.0)
-                ON CONFLICT(checklist_id, period_identifier, day_of_week) DO UPDATE SET
-                    log_date = excluded.log_date,
-                    is_completed = excluded.is_completed
-                """,
-                (goal_id, period_identifier, today_str, 1 if is_completed else 0),
-            )
-            conn.commit()
 
     # --- РОТАЦИЯ ПЕРИОДОВ ---
 
@@ -394,3 +344,318 @@ class ChecklistRepository:
             """
             rows = conn.execute(query, (limit,)).fetchall()
             return [dict(row) for row in reversed(rows)]
+    def save_daily_task_progress(
+        self,
+        checklist_id: int,
+        date_str: str,
+        is_completed: bool,
+        numeric_value: float = 0.0,
+    ) -> dict[str, int]:
+        """
+        Сохраняет прогресс задачи дня и управляет монетами (с защитой от накрутки).
+        Возвращает словарь: {"coins_delta": ..., "bonus_awarded": ...}.
+        """
+        coins_delta = 0
+        bonus_awarded = 0
+
+        with self.db.get_connection() as conn:
+            # 1. Проверяем, была ли уже выдана награда за эту задачу в этот день
+            row = conn.execute(
+                """
+                SELECT is_completed, reward_claimed
+                FROM checklist_logs
+                WHERE checklist_id = ? AND period_identifier = ? AND day_of_week = 0
+                """,
+                (checklist_id, date_str),
+            ).fetchone()
+
+            already_claimed = bool(row["reward_claimed"]) if row else False
+            new_claimed = 1 if is_completed else 0
+
+            if is_completed and not already_claimed:
+                coins_delta += PlantConfig.REWARD_DAILY_TASK
+            elif not is_completed and already_claimed:
+                coins_delta -= PlantConfig.REWARD_DAILY_TASK
+
+            # 2. Сохраняем запись в checklist_logs
+            conn.execute(
+                """
+                INSERT INTO checklist_logs (
+                    checklist_id, period_identifier, day_of_week, log_date,
+                    is_completed, numeric_value, reward_claimed
+                )
+                VALUES (?, ?, 0, ?, ?, ?, ?)
+                ON CONFLICT(checklist_id, period_identifier, day_of_week) DO UPDATE SET
+                    log_date = excluded.log_date,
+                    is_completed = excluded.is_completed,
+                    numeric_value = excluded.numeric_value,
+                    reward_claimed = excluded.reward_claimed
+                """,
+                (
+                    checklist_id,
+                    date_str,
+                    date_str,
+                    1 if is_completed else 0,
+                    float(numeric_value),
+                    new_claimed,
+                ),
+            )
+
+            # 3. Проверяем бонус за 100% выполнения всех задач на эту дату
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            day_tasks = self._get_tasks_for_date_internal(conn, date_str, dt.isoweekday())
+            if day_tasks and all(t["is_completed"] == 1 for t in day_tasks):
+                p_row = conn.execute(
+                    "SELECT last_perfect_day_date FROM plant_state WHERE id = 1;"
+                ).fetchone()
+                if p_row and p_row["last_perfect_day_date"] != date_str:
+                    bonus_awarded = PlantConfig.REWARD_PERFECT_DAY_BONUS
+                    coins_delta += bonus_awarded
+                    conn.execute(
+                        "UPDATE plant_state SET last_perfect_day_date = ? WHERE id = 1;",
+                        (date_str,),
+                    )
+
+            # 4. Проверяем, не достигла ли какая-нибудь накопительная цель месяца/года 100%
+            month_id = date_str[:7]
+            year_id = date_str[:4]
+            coins_delta += self._check_numeric_goals_rewards(conn, "month", month_id)
+            coins_delta += self._check_numeric_goals_rewards(conn, "year", year_id)
+
+            if coins_delta != 0:
+                conn.execute(
+                    "UPDATE plant_state SET coins = MAX(0, coins + ?) WHERE id = 1;",
+                    (coins_delta,),
+                )
+
+            conn.commit()
+
+        return {"coins_delta": coins_delta, "bonus_awarded": bonus_awarded}
+
+    def _get_tasks_for_date_internal(self, conn: Any, date_str: str, day_of_week: int) -> list[dict[str, Any]]:
+        rows = conn.execute(
+            """
+            SELECT 
+                c.id, c.period_type, c.days_of_week,
+                COALESCE(l.is_completed, 0) AS is_completed
+            FROM checklists c
+            LEFT JOIN checklist_logs l 
+                ON c.id = l.checklist_id AND l.period_identifier = ? AND l.day_of_week = 0
+            WHERE c.period_type IN ('day', 'week') AND c.is_active = 1
+            """,
+            (date_str,),
+        ).fetchall()
+        day_str = str(day_of_week)
+        res = []
+        for r in rows:
+            d = dict(r)
+            if d["period_type"] == "week" and d.get("days_of_week") and day_str not in d["days_of_week"].split(","):
+                continue
+            res.append(d)
+        return res
+
+    def _check_numeric_goals_rewards(self, conn: Any, period_type: str, period_identifier: str) -> int:
+        """Начисляет награду за достижение накопительной цели месяца или года (один раз за период)."""
+        reward_amount = (
+            PlantConfig.REWARD_MONTH_GOAL if period_type == "month" else PlantConfig.REWARD_YEAR_GOAL
+        )
+        goals = conn.execute(
+            """
+            SELECT id, target_value FROM checklists
+            WHERE period_type = ? AND goal_type = 'numeric' AND is_active = 1
+            """,
+            (period_type,),
+        ).fetchall()
+
+        delta = 0
+        today_str = datetime.now().strftime("%Y-%m-%d")
+
+        for g in goals:
+            gid = g["id"]
+            target = float(g["target_value"] or 0.0)
+            if target <= 0:
+                continue
+
+            accumulated = self._calculate_linked_goal_sum(conn, gid, period_identifier)
+            is_reached = accumulated >= target
+
+            log_row = conn.execute(
+                """
+                SELECT reward_claimed FROM checklist_logs
+                WHERE checklist_id = ? AND period_identifier = ? AND day_of_week = 0
+                """,
+                (gid, period_identifier),
+            ).fetchone()
+            already_claimed = bool(log_row["reward_claimed"]) if log_row else False
+
+            if is_reached and not already_claimed:
+                delta += reward_amount
+                conn.execute(
+                    """
+                    INSERT INTO checklist_logs (
+                        checklist_id, period_identifier, day_of_week, log_date,
+                        is_completed, numeric_value, reward_claimed
+                    )
+                    VALUES (?, ?, 0, ?, 1, ?, 1)
+                    ON CONFLICT(checklist_id, period_identifier, day_of_week) DO UPDATE SET
+                        is_completed = 1, numeric_value = excluded.numeric_value, reward_claimed = 1
+                    """,
+                    (gid, period_identifier, today_str, accumulated),
+                )
+            elif not is_reached and already_claimed:
+                delta -= reward_amount
+                conn.execute(
+                    """
+                    UPDATE checklist_logs
+                    SET is_completed = 0, numeric_value = ?, reward_claimed = 0
+                    WHERE checklist_id = ? AND period_identifier = ? AND day_of_week = 0
+                    """,
+                    (accumulated, gid, period_identifier),
+                )
+
+        return delta
+
+    def save_boolean_goal_progress(
+        self,
+        goal_id: int,
+        period_identifier: str,
+        is_completed: bool,
+    ) -> int:
+        """Сохраняет отметку разовой цели-чекбокса и начисляет/списывает монеты."""
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        coins_delta = 0
+
+        with self.db.get_connection() as conn:
+            g_row = conn.execute(
+                "SELECT period_type FROM checklists WHERE id = ?", (goal_id,)
+            ).fetchone()
+            p_type = g_row["period_type"] if g_row else "month"
+            reward = (
+                PlantConfig.REWARD_MONTH_GOAL if p_type == "month" else PlantConfig.REWARD_YEAR_GOAL
+            )
+
+            log_row = conn.execute(
+                """
+                SELECT reward_claimed FROM checklist_logs
+                WHERE checklist_id = ? AND period_identifier = ? AND day_of_week = 0
+                """,
+                (goal_id, period_identifier),
+            ).fetchone()
+            already_claimed = bool(log_row["reward_claimed"]) if log_row else False
+            new_claimed = 1 if is_completed else 0
+
+            if is_completed and not already_claimed:
+                coins_delta = reward
+            elif not is_completed and already_claimed:
+                coins_delta = -reward
+
+            conn.execute(
+                """
+                INSERT INTO checklist_logs (
+                    checklist_id, period_identifier, day_of_week, log_date,
+                    is_completed, numeric_value, reward_claimed
+                )
+                VALUES (?, ?, 0, ?, ?, 0.0, ?)
+                ON CONFLICT(checklist_id, period_identifier, day_of_week) DO UPDATE SET
+                    log_date = excluded.log_date,
+                    is_completed = excluded.is_completed,
+                    reward_claimed = excluded.reward_claimed
+                """,
+                (goal_id, period_identifier, today_str, 1 if is_completed else 0, new_claimed),
+            )
+
+            if coins_delta != 0:
+                conn.execute(
+                    "UPDATE plant_state SET coins = MAX(0, coins + ?) WHERE id = 1;",
+                    (coins_delta,),
+                )
+            conn.commit()
+
+        return coins_delta
+    # --- РАСТЕНИЕ И ЭКОНОМИКА ---
+
+    def get_plant_state(self) -> dict[str, Any]:
+        """Возвращает актуальное состояние растения, применяя мягкое снижение влажности за прошедшие дни."""
+        today = datetime.now().date()
+        today_str = today.strftime("%Y-%m-%d")
+
+        with self.db.get_connection() as conn:
+            row = conn.execute("SELECT * FROM plant_state WHERE id = 1;").fetchone()
+            state = dict(row)
+
+            # 1. Мягкое снижение влажности за дни без полива (-20% в день, уровень и XP никогда не падают)
+            last_decay = datetime.strptime(state["last_decay_date"], "%Y-%m-%d").date()
+            days_passed = (today - last_decay).days
+            if days_passed > 0:
+                new_hydration = max(0, state["hydration"] - days_passed * 20)
+                conn.execute(
+                    "UPDATE plant_state SET hydration = ?, last_decay_date = ? WHERE id = 1;",
+                    (new_hydration, today_str),
+                )
+                state["hydration"] = new_hydration
+                state["last_decay_date"] = today_str
+
+            # 2. Сброс дневных лимитов ухода при наступлении нового дня
+            if state["care_date"] != today_str:
+                conn.execute(
+                    """
+                    UPDATE plant_state
+                    SET care_date = ?, sun_count_today = 0, water_count_today = 0, fertilize_count_today = 0
+                    WHERE id = 1;
+                    """,
+                    (today_str,),
+                )
+                state["care_date"] = today_str
+                state["sun_count_today"] = 0
+                state["water_count_today"] = 0
+                state["fertilize_count_today"] = 0
+
+            conn.commit()
+            return state
+
+    def perform_plant_care(self, action_key: str) -> tuple[bool, str]:
+        """Выполняет действие ухода ('sun', 'water', 'fertilize'). Возвращает (успех, сообщение)."""
+        if action_key not in PlantConfig.ACTIONS:
+            return False, "Неизвестное действие"
+
+        action = PlantConfig.ACTIONS[action_key]
+        state = self.get_plant_state()
+
+        count_col = f"{action_key}_count_today"
+        used_today = int(state.get(count_col, 0))
+        if used_today >= action["daily_limit"]:
+            return False, f"На сегодня лимит исчерпан ({used_today}/{action['daily_limit']})"
+
+        cost = int(action["cost"])
+        if state["coins"] < cost:
+            return False, f"Недостаточно монет (нужно {cost})"
+
+        # Бонус +10% к опыту, если растение хорошо увлажнено (>= 70%)
+        base_xp = int(action["xp"])
+        xp_gain = int(round(base_xp * 1.1)) if state["hydration"] >= 70 else base_xp
+
+        new_coins = state["coins"] - cost
+        new_xp = state["xp"] + xp_gain
+        new_hydration = min(100, state["hydration"] + int(action["hydration"]))
+        new_count = used_today + 1
+
+        with self.db.get_connection() as conn:
+            conn.execute(
+                f"""
+                UPDATE plant_state
+                SET coins = ?, xp = ?, hydration = ?, {count_col} = ?
+                WHERE id = 1;
+                """,
+                (new_coins, new_xp, new_hydration, new_count),
+            )
+            conn.commit()
+
+        return True, f"+{xp_gain} XP! Растение довольно"
+
+    def rename_plant(self, new_name: str) -> None:
+        clean = new_name.strip()
+        if not clean:
+            return
+        with self.db.get_connection() as conn:
+            conn.execute("UPDATE plant_state SET plant_name = ? WHERE id = 1;", (clean,))
+            conn.commit()

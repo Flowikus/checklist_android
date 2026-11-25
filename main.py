@@ -6,6 +6,7 @@ from core.utils.period_helper import PeriodHelper
 from ui.components.renewal_dialog import show_renewal_dialog
 from ui.theme.app_theme import get_app_theme
 from ui.views.today_view import TodayView
+from ui.views.plant_view import PlantView
 from ui.views.analytics_view import AnalyticsView
 from ui.views.settings_view import SettingsView
 
@@ -19,11 +20,12 @@ def main(page: ft.Page):
     page.theme = get_app_theme()
     page.theme_mode = ft.ThemeMode.LIGHT
 
-    today_view = TodayView(repo=repo)
+    today_view = TodayView(page=page, repo=repo)
+    plant_view = PlantView(page=page, repo=repo)
     analytics_view = AnalyticsView(repo=repo)
     settings_view = SettingsView(page=page, repo=repo)
 
-    views = [today_view, analytics_view, settings_view]
+    views = [today_view, plant_view, analytics_view, settings_view]
     body_container = ft.Container(content=today_view, expand=True)
 
     def on_nav_change(e: ft.ControlEvent):
@@ -33,6 +35,8 @@ def main(page: ft.Page):
 
         if isinstance(selected_view, TodayView):
             selected_view.refresh_data(should_update=False)
+        elif isinstance(selected_view, PlantView):
+            selected_view.refresh_data(should_update=False)
         elif isinstance(selected_view, AnalyticsView):
             selected_view.refresh_all(should_update=False)
         elif isinstance(selected_view, SettingsView):
@@ -41,7 +45,7 @@ def main(page: ft.Page):
         body_container.update()
 
     def switch_to_settings(filter_period: str):
-        page.navigation_bar.selected_index = 2
+        page.navigation_bar.selected_index = 3
         settings_view.set_period(filter_period)
         body_container.content = settings_view
         page.update()
@@ -49,6 +53,8 @@ def main(page: ft.Page):
     def refresh_active_view():
         current = body_container.content
         if isinstance(current, TodayView):
+            current.refresh_data(should_update=True)
+        elif isinstance(current, PlantView):
             current.refresh_data(should_update=True)
         elif isinstance(current, AnalyticsView):
             current.refresh_all(should_update=True)
@@ -59,7 +65,7 @@ def main(page: ft.Page):
             show_renewal_dialog(
                 page=page,
                 repo=repo,
-                period_type=pending_periods[0],
+                period_type=pending_periods,
                 on_edit_requested=switch_to_settings,
                 on_keep_requested=refresh_active_view,
             )
@@ -79,6 +85,11 @@ def main(page: ft.Page):
                 icon=ft.Icons.TODAY_OUTLINED,
                 selected_icon=ft.Icons.TODAY,
                 label="Сегодня",
+            ),
+            ft.NavigationBarDestination(
+                icon=ft.Icons.ECO_OUTLINED,
+                selected_icon=ft.Icons.ECO,
+                label="Растение",
             ),
             ft.NavigationBarDestination(
                 icon=ft.Icons.INSIGHTS_OUTLINED,
