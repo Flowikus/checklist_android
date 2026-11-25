@@ -91,6 +91,13 @@ class DatabaseManager:
             """,
             (today_str, today_str),
         )
+        cursor.execute("PRAGMA table_info(plant_state);")
+        p_cols = [row["name"] for row in cursor.fetchall()]
+        if "theme_key" not in p_cols:
+            cursor.execute(
+                "ALTER TABLE plant_state ADD COLUMN theme_key TEXT NOT NULL DEFAULT 'teal';"
+        )
+
 
     def _create_v5_tables(self, cursor: sqlite3.Cursor) -> None:
         cursor.execute("""

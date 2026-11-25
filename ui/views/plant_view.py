@@ -201,7 +201,7 @@ class PlantView(ft.Container):
     @staticmethod
     def _build_plant_illustration(stage: int, hydration: int) -> ft.Control:
         """Рисует стилизованное растение в горшке в зависимости от стадии (1..6) и влажности."""
-        leaf_color = AppColors.SUCCESS if hydration >= 30 else AppColors.NEUTRAL_ACCENT
+        leaf_color = "#5E9472" if hydration >= 30 else AppColors.NEUTRAL_ACCENT
         stem_color = AppColors.PRIMARY
         pot_color = AppColors.NEUTRAL_ACCENT
         pot_rim_color = "#6E6256"

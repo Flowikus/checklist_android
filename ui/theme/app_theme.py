@@ -11,11 +11,13 @@ def get_app_theme() -> ft.Theme:
             primary_container=AppColors.PRIMARY_LIGHT,
             on_primary_container=AppColors.TEXT_PRIMARY,
             secondary=AppColors.SUCCESS,
+            secondary_container=AppColors.PRIMARY_LIGHT,
+            on_secondary_container=AppColors.TEXT_PRIMARY,
             surface=AppColors.CARD_BG,
             on_surface=AppColors.TEXT_PRIMARY,
             on_surface_variant=AppColors.TEXT_SECONDARY,
             outline=AppColors.DIVIDER,
-            error=AppColors.WARNING_DELETE,  # Переопределяем системный красный на индиго
+            error=AppColors.WARNING_DELETE,
         ),
         scaffold_bgcolor=AppColors.BACKGROUND,
         card_theme=ft.CardTheme(

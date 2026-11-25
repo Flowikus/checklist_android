@@ -1,6 +1,6 @@
 [project]
 name = "checklist-android"
-version = "0.5.1"
+version = "0.5.3"
 description = "Android-приложение для трекинга чек-листов на неделю, месяц и год"
 requires-python = ">=3.11"
 dependencies = [

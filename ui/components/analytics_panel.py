@@ -216,7 +216,7 @@ class AnalyticsPanel(ft.Card):
         for idx, item in enumerate(week_stats):
             pct = float(item["percent"])
             is_today = item["is_today"]
-            bar_color = AppColors.SUCCESS if is_today else AppColors.PRIMARY
+            bar_color = AppColors.SUCCESS if is_today else AppColors.PRIMARY_MUTED
 
             groups.append(
                 fch.BarChartGroup(

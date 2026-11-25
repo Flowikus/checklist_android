@@ -1,4 +1,5 @@
 import flet as ft
+from core.constants.colors import AppColors
 from core.constants.strings import AppStrings
 from core.database.db_manager import DatabaseManager
 from core.database.repository import ChecklistRepository
@@ -16,14 +17,41 @@ def main(page: ft.Page):
     db_manager.init_db()
     repo = ChecklistRepository(db_manager)
 
+    # Применяем сохранённую цветовую тему до построения интерфейса
+    saved_theme = repo.get_theme_key()
+    AppColors.apply_theme(saved_theme)
+
     page.title = AppStrings.APP_TITLE
     page.theme = get_app_theme()
     page.theme_mode = ft.ThemeMode.LIGHT
+    page.bgcolor = AppColors.BACKGROUND
+
+    def handle_theme_changed():
+        page.theme = get_app_theme()
+        page.bgcolor = AppColors.BACKGROUND
+        # Пересоздаём экраны с новыми цветами AppColors, оставляя пользователя на вкладке Настройки
+        nonlocal today_view, plant_view, analytics_view, settings_view, views
+        today_view = TodayView(page=page, repo=repo)
+        plant_view = PlantView(page=page, repo=repo)
+        analytics_view = AnalyticsView(repo=repo)
+        settings_view = SettingsView(
+            page=page,
+            repo=repo,
+            initial_period=settings_view.selected_period,
+            on_theme_changed=handle_theme_changed,
+        )
+        views = [today_view, plant_view, analytics_view, settings_view]
+        body_container.content = settings_view
+        page.update()
 
     today_view = TodayView(page=page, repo=repo)
     plant_view = PlantView(page=page, repo=repo)
     analytics_view = AnalyticsView(repo=repo)
-    settings_view = SettingsView(page=page, repo=repo)
+    settings_view = SettingsView(
+        page=page,
+        repo=repo,
+        on_theme_changed=handle_theme_changed,
+    )
 
     views = [today_view, plant_view, analytics_view, settings_view]
     body_container = ft.Container(content=today_view, expand=True)

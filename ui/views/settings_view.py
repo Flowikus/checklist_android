@@ -7,11 +7,18 @@ from ui.components.week_day_selector import WeekDaySelector
 
 
 class SettingsView(ft.Container):
-    def __init__(self, page: ft.Page, repo: ChecklistRepository, initial_period: str = AppStrings.PERIOD_DAY):
+    def __init__(
+        self,
+        page: ft.Page,
+        repo: ChecklistRepository,
+        initial_period: str = AppStrings.PERIOD_DAY,
+        on_theme_changed=None,
+    ):
         super().__init__(expand=True, padding=ft.Padding.only(left=16, right=16, top=12))
         self.app_page = page
         self.repo = repo
         self.selected_period = initial_period
+        self.on_theme_changed = on_theme_changed
 
         self.period_selector = ft.Dropdown(
             value=self.selected_period,
@@ -55,6 +62,8 @@ class SettingsView(ft.Container):
             on_click=lambda e: self._open_task_dialog(item=None),
         )
 
+        self.theme_card = self._build_theme_selector_card()
+
         self.content = ft.Column(
             controls=[
                 ft.Text(
@@ -63,11 +72,12 @@ class SettingsView(ft.Container):
                     weight=ft.FontWeight.BOLD,
                     color=AppColors.TEXT_PRIMARY,
                 ),
+                self.theme_card,
                 ft.Row(controls=[self.period_selector]),
                 self.tasks_column,
                 ft.Container(content=add_button, padding=ft.Padding.only(bottom=12, top=4)),
             ],
-            spacing=14,
+            spacing=12,
             expand=True,
         )
 
@@ -89,6 +99,69 @@ class SettingsView(ft.Container):
             self.selected_period = e.control.value
             self._update_add_button_label()
             self.load_tasks()
+
+    def _build_theme_selector_card(self) -> ft.Card:
+        current_key = self.repo.get_theme_key()
+        theme_items: list[ft.Control] = []
+
+        for key, data in AppColors.THEMES.items():
+            is_selected = (key == current_key)
+            circle = ft.Container(
+                width=28,
+                height=28,
+                border_radius=14,
+                bgcolor=data["primary"],
+                border=ft.Border.all(3, AppColors.TEXT_PRIMARY) if is_selected else None,
+                alignment=ft.Alignment.CENTER,
+                content=ft.Icon(ft.Icons.CHECK, size=16, color="#FFFFFF") if is_selected else None,
+            )
+            theme_items.append(
+                ft.GestureDetector(
+                    on_tap=lambda e, k=key: self._select_theme(k),
+                    content=ft.Column(
+                        spacing=4,
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        controls=[
+                            circle,
+                            ft.Text(
+                                data["name"],
+                                size=11,
+                                weight=ft.FontWeight.BOLD if is_selected else ft.FontWeight.NORMAL,
+                                color=AppColors.TEXT_PRIMARY if is_selected else AppColors.TEXT_SECONDARY,
+                            ),
+                        ],
+                    ),
+                )
+            )
+
+        return ft.Card(
+            content=ft.Container(
+                padding=ft.Padding.symmetric(horizontal=14, vertical=10),
+                content=ft.Column(
+                    spacing=8,
+                    controls=[
+                        ft.Text(
+                            "Цветовая тема",
+                            size=13,
+                            weight=ft.FontWeight.W_600,
+                            color=AppColors.TEXT_SECONDARY,
+                        ),
+                        ft.Row(
+                            alignment=ft.MainAxisAlignment.SPACE_AROUND,
+                            controls=theme_items,
+                        ),
+                    ],
+                ),
+            )
+        )
+
+    def _select_theme(self, theme_key: str) -> None:
+        applied_key = AppColors.apply_theme(theme_key)
+        self.repo.set_theme_key(applied_key)
+        self.theme_card.content = self._build_theme_selector_card().content
+        if self.on_theme_changed:
+            self.on_theme_changed()
+
 
     def load_tasks(self, should_update: bool = True) -> None:
         self.tasks_column.controls.clear()

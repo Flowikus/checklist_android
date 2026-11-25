@@ -687,3 +687,13 @@ class ChecklistRepository:
         with self.db.get_connection() as conn:
             conn.execute("UPDATE plant_state SET plant_name = ? WHERE id = 1;", (clean,))
             conn.commit()
+
+    def get_theme_key(self) -> str:
+        with self.db.get_connection() as conn:
+            row = conn.execute("SELECT theme_key FROM plant_state WHERE id = 1;").fetchone()
+            return row["theme_key"] if (row and row["theme_key"]) else "teal"
+
+    def set_theme_key(self, theme_key: str) -> None:
+        with self.db.get_connection() as conn:
+            conn.execute("UPDATE plant_state SET theme_key = ? WHERE id = 1;", (theme_key,))
+            conn.commit()
