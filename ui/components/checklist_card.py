@@ -124,12 +124,19 @@ class ChecklistCard(ft.Card):
             return
 
         # --- РЕЖИМ 3: ЗАДАЧА НА СЕГОДНЯ ("День" или "Неделя") ---
+
+        if self.has_numeric:
+            target = float(self.target_value or 0.0)
+            is_done = (num_val >= target) if target > 0 else (num_val > 0)
+
         self.checkbox = ft.Checkbox(
             value=is_done,
+            disabled=self.has_numeric,
             active_color=AppColors.SUCCESS,
             check_color="#FFFFFF",
             on_change=self._handle_checkbox_change,
         )
+
 
         self.title_text = ft.Text(
             task_data["title"],
@@ -236,7 +243,9 @@ class ChecklistCard(ft.Card):
 
     def _handle_number_change(self, e: ft.ControlEvent) -> None:
         num_val = self._parse_numeric_value()
-        is_done = num_val > 0
+        target = float(self.target_value or 0.0)
+        is_done = (num_val >= target) if target > 0 else (num_val > 0)
+
         if self.checkbox.value != is_done:
             self.checkbox.value = is_done
             try:
