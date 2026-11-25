@@ -9,7 +9,6 @@ def get_db_path() -> str:
     if storage_dir:
         base_path = Path(storage_dir)
     else:
-        # Локальная папка при разработке и тестировании на ПК
         base_path = Path("storage/data")
 
     base_path.mkdir(parents=True, exist_ok=True)
@@ -31,29 +30,42 @@ class DatabaseManager:
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            # Проверяем, существует ли уже таблица checklists от старой версии
             cursor.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='checklists';"
             )
             table_exists = cursor.fetchone() is not None
 
             if not table_exists:
-                self._create_v2_tables(cursor)
+                self._create_v3_tables(cursor)
             else:
-                # Проверяем, нужна ли миграция (есть ли колонка days_of_week)
                 cursor.execute("PRAGMA table_info(checklists);")
                 columns = [row["name"] for row in cursor.fetchall()]
+
                 if "days_of_week" not in columns:
                     self._migrate_v1_to_v2(cursor)
 
+                # Миграция до v3: добавляем колонку goal_key для связи задач с целями месяца/года
+                cursor.execute("PRAGMA table_info(checklists);")
+                columns = [row["name"] for row in cursor.fetchall()]
+                if "goal_key" not in columns:
+                    cursor.execute("ALTER TABLE checklists ADD COLUMN goal_key TEXT;")
+                    # Заполняем goal_key для уже существующих записей по их названию
+                    cursor.execute("SELECT id, title FROM checklists;")
+                    for row in cursor.fetchall():
+                        norm_key = (row["title"] or "").strip().lower()
+                        cursor.execute(
+                            "UPDATE checklists SET goal_key = ? WHERE id = ?;",
+                            (norm_key, row["id"]),
+                        )
+
             conn.commit()
 
-    def _create_v2_tables(self, cursor: sqlite3.Cursor) -> None:
-        """Создает актуальную структуру таблиц v2 с поддержкой 'day' и дней недели."""
+    def _create_v3_tables(self, cursor: sqlite3.Cursor) -> None:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS checklists (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL,
+                goal_key TEXT,
                 period_type TEXT NOT NULL CHECK(period_type IN ('day', 'week', 'month', 'year')),
                 days_of_week TEXT,
                 has_numeric_input INTEGER NOT NULL DEFAULT 0,
@@ -86,26 +98,23 @@ class DatabaseManager:
         """)
 
     def _migrate_v1_to_v2(self, cursor: sqlite3.Cursor) -> None:
-        """Переносит существующие данные из v1 в v2 с обновлением CHECK и UNIQUE."""
         cursor.execute("PRAGMA foreign_keys = OFF;")
 
-        # 1. Переименовываем старые таблицы
         cursor.execute("ALTER TABLE checklists RENAME TO checklists_old;")
         cursor.execute("ALTER TABLE checklist_logs RENAME TO checklist_logs_old;")
         cursor.execute("ALTER TABLE period_states RENAME TO period_states_old;")
 
-        # 2. Создаем новые таблицы v2
-        self._create_v2_tables(cursor)
+        self._create_v3_tables(cursor)
 
-        # 3. Копируем данные из старых таблиц (старые недельные задачи будут видны во все дни недели: '1,2,3,4,5,6,7')
         cursor.execute("""
             INSERT INTO checklists (
-                id, title, period_type, days_of_week, has_numeric_input,
+                id, title, goal_key, period_type, days_of_week, has_numeric_input,
                 unit_name, target_value, is_active, created_at
             )
             SELECT
                 id,
                 title,
+                LOWER(TRIM(title)),
                 period_type,
                 CASE WHEN period_type = 'week' THEN '1,2,3,4,5,6,7' ELSE NULL END,
                 has_numeric_input,
@@ -133,7 +142,6 @@ class DatabaseManager:
             FROM period_states_old;
         """)
 
-        # 4. Удаляем временные старые таблицы
         cursor.execute("DROP TABLE checklist_logs_old;")
         cursor.execute("DROP TABLE checklists_old;")
         cursor.execute("DROP TABLE period_states_old;")

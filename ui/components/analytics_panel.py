@@ -1,3 +1,4 @@
+import math
 import flet as ft
 import flet_charts as fch
 from core.constants.colors import AppColors
@@ -18,13 +19,11 @@ class AnalyticsPanel(ft.Card):
         self.is_expanded = False
         self.selected_chart = "pie"
 
-        # Иконка сворачивания/разворачивания
         self.expand_icon = ft.Icon(
             ft.Icons.EXPAND_MORE,
             color=AppColors.TEXT_SECONDARY,
         )
 
-        # Заголовок с процентом выполнения
         self.summary_label = ft.Text(
             "Аналитика • 0%",
             size=14,
@@ -32,26 +31,25 @@ class AnalyticsPanel(ft.Card):
             color=AppColors.TEXT_PRIMARY,
         )
 
-        # Переключатель типа графика (list вместо set для Flet 1.0+)
+        is_goal_tab = self.period_type in ("month", "year")
+
         self.chart_selector = ft.SegmentedButton(
             selected=[self.selected_chart],
             allow_multiple_selection=False,
             on_change=self._on_chart_type_change,
             segments=[
                 ft.Segment(value="pie", label=ft.Text("Итог")),
-                ft.Segment(value="bar", label=ft.Text("Задачи")),
+                ft.Segment(value="bar", label=ft.Text("Цели" if is_goal_tab else "Задачи")),
                 ft.Segment(value="line", label=ft.Text("Числа")),
             ],
         )
 
-        # Контейнер для отрисовки выбранного графика
         self.chart_holder = ft.Container(
-            height=175,
+            height=185,
             alignment=ft.Alignment.CENTER,
-            padding=ft.Padding.only(top=8),
+            padding=ft.Padding.only(top=10, right=12, left=4),
         )
 
-        # Раскрываемая часть карточки
         self.details_container = ft.Container(
             visible=self.is_expanded,
             padding=ft.Padding.only(top=10),
@@ -65,7 +63,6 @@ class AnalyticsPanel(ft.Card):
             ),
         )
 
-        # Кликабельная шапка панели
         header_row = ft.GestureDetector(
             on_tap=self._toggle_expand,
             content=ft.Row(
@@ -139,6 +136,32 @@ class AnalyticsPanel(ft.Card):
         else:
             self.chart_holder.content = self._build_line_chart()
 
+    @staticmethod
+    def _build_clean_left_axis(max_y: float, reserved_width: int = 38) -> fch.ChartAxis:
+        """Формирует аккуратные целочисленные метки оси Y без обрезания и дробных хвостов."""
+        step = max(1, math.ceil(max_y / 3))
+        top_tick = step * 3
+        labels = [
+            fch.ChartAxisLabel(
+                value=float(v),
+                label=ft.Container(
+                    alignment=ft.Alignment.CENTER_RIGHT,
+                    padding=ft.Padding.only(right=6),
+                    content=ft.Text(
+                        str(int(v)),
+                        size=10,
+                        color=AppColors.TEXT_SECONDARY,
+                    ),
+                ),
+            )
+            for v in (0, step, step * 2, top_tick)
+        ]
+        return fch.ChartAxis(
+            labels=labels,
+            label_size=reserved_width,
+            show_labels=True,
+        )
+
     def _build_pie_chart(self) -> ft.Control:
         stats = self.repo.get_period_summary_stats(self.period_type, self.period_identifier)
         total = stats["total"]
@@ -146,29 +169,30 @@ class AnalyticsPanel(ft.Card):
         remaining = stats["remaining"]
 
         if total == 0:
-            return ft.Text("Нет задач для расчёта", size=13, color=AppColors.TEXT_SECONDARY)
+            return ft.Text("Нет данных для расчёта", size=13, color=AppColors.TEXT_SECONDARY)
 
         pie = fch.PieChart(
             sections_space=2,
-            center_space_radius=32,
-            width=140,
-            height=140,
+            center_space_radius=30,
+            width=130,
+            height=130,
             sections=[
                 fch.PieChartSection(
                     value=float(completed),
                     color=AppColors.SUCCESS,
-                    radius=24,
+                    radius=22,
                     title="",
                 ),
                 fch.PieChartSection(
                     value=float(remaining),
                     color=AppColors.SURFACE_VARIANT,
-                    radius=22,
+                    radius=20,
                     title="",
                 ),
             ],
         )
 
+        done_label = "Достигнуто" if self.period_type in ("month", "year") else "Выполнено"
 
         legend = ft.Column(
             spacing=8,
@@ -178,7 +202,7 @@ class AnalyticsPanel(ft.Card):
                     spacing=6,
                     controls=[
                         ft.Container(width=12, height=12, bgcolor=AppColors.SUCCESS, border_radius=3),
-                        ft.Text(f"Выполнено: {completed}", size=13, color=AppColors.TEXT_PRIMARY),
+                        ft.Text(f"{done_label}: {completed}", size=13, color=AppColors.TEXT_PRIMARY),
                     ],
                 ),
                 ft.Row(
@@ -202,15 +226,15 @@ class AnalyticsPanel(ft.Card):
         if not history:
             return ft.Text("История выполнения пока пуста", size=13, color=AppColors.TEXT_SECONDARY)
 
-        max_val = max((item["completed_count"] or 0) for item in history)
-        max_y = float(max(max_val + 1, 2))
+        raw_max = max((item["completed_count"] or 0) for item in history)
+        step = max(1, math.ceil(max(raw_max, 2) / 3))
+        max_y = float(step * 3)
 
         groups: list[fch.BarChartGroup] = []
         bottom_labels: list[fch.ChartAxisLabel] = []
 
         for idx, item in enumerate(history):
             val = float(item["completed_count"] or 0)
-            # Сокращаем подпись периода (например, '2026-W47' -> 'W47')
             short_label = item["period_identifier"].split("-")[-1]
 
             groups.append(
@@ -220,7 +244,7 @@ class AnalyticsPanel(ft.Card):
                         fch.BarChartRod(
                             from_y=0,
                             to_y=val,
-                            width=18,
+                            width=16,
                             color=AppColors.PRIMARY,
                             border_radius=ft.BorderRadius.only(top_left=6, top_right=6),
                         )
@@ -230,7 +254,7 @@ class AnalyticsPanel(ft.Card):
             bottom_labels.append(
                 fch.ChartAxisLabel(
                     value=idx,
-                    label=ft.Text(short_label, size=11, color=AppColors.TEXT_SECONDARY),
+                    label=ft.Text(short_label, size=10, color=AppColors.TEXT_SECONDARY),
                 )
             )
 
@@ -240,12 +264,11 @@ class AnalyticsPanel(ft.Card):
             border=ft.Border(
                 bottom=ft.BorderSide(1, AppColors.DIVIDER),
             ),
-            bottom_axis=fch.ChartAxis(labels=bottom_labels, label_size=24),
-            left_axis=fch.ChartAxis(label_size=28),
+            bottom_axis=fch.ChartAxis(labels=bottom_labels, label_size=22),
+            left_axis=self._build_clean_left_axis(max_y, reserved_width=34),
             horizontal_grid_lines=fch.ChartGridLines(color=AppColors.DIVIDER, width=0.5),
             expand=True,
         )
-
 
     def _build_line_chart(self) -> ft.Control:
         history = self.repo.get_historical_completion(self.period_type, limit=6)
@@ -254,28 +277,31 @@ class AnalyticsPanel(ft.Card):
 
         points: list[fch.LineChartDataPoint] = []
         bottom_labels: list[fch.ChartAxisLabel] = []
-        max_val = 0.0
+        raw_max = 0.0
 
         for idx, item in enumerate(history):
             val = float(item["total_numeric"] or 0.0)
-            if val > max_val:
-                max_val = val
+            if val > raw_max:
+                raw_max = val
             short_label = item["period_identifier"].split("-")[-1]
 
             points.append(fch.LineChartDataPoint(x=float(idx), y=val))
             bottom_labels.append(
                 fch.ChartAxisLabel(
                     value=idx,
-                    label=ft.Text(short_label, size=11, color=AppColors.TEXT_SECONDARY),
+                    label=ft.Text(short_label, size=10, color=AppColors.TEXT_SECONDARY),
                 )
             )
 
-        if max_val == 0:
+        if raw_max == 0:
             return ft.Text("Числовые показатели пока равны 0", size=13, color=AppColors.TEXT_SECONDARY)
+
+        step = max(1, math.ceil((raw_max * 1.1) / 3))
+        max_y = float(step * 3)
 
         return fch.LineChart(
             min_y=0,
-            max_y=max_val * 1.2,
+            max_y=max_y,
             min_x=0,
             max_x=float(max(len(points) - 1, 1)),
             data_series=[
@@ -287,8 +313,8 @@ class AnalyticsPanel(ft.Card):
                     point=True,
                 )
             ],
-            bottom_axis=fch.ChartAxis(labels=bottom_labels, label_size=24),
-            left_axis=fch.ChartAxis(label_size=34),
+            bottom_axis=fch.ChartAxis(labels=bottom_labels, label_size=22),
+            left_axis=self._build_clean_left_axis(max_y, reserved_width=42),
             horizontal_grid_lines=fch.ChartGridLines(color=AppColors.DIVIDER, width=0.5),
             expand=True,
         )

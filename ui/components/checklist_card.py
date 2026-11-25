@@ -18,8 +18,88 @@ class ChecklistCard(ft.Card):
 
         is_done = bool(task_data["is_completed"])
         num_val = float(task_data["numeric_value"] or 0.0)
+        is_goal_card = bool(task_data.get("is_goal_card", False))
 
-        # Чек-бокс
+        # --- РЕЖИМ ЦЕЛИ (для вкладок "Месяц" и "Год") ---
+        if is_goal_card:
+            target = float(self.target_value or 0.0)
+            progress = min(num_val / target, 1.0) if target > 0 else 0.0
+            percent = round((num_val / target) * 100, 1) if target > 0 else 0.0
+
+            cur_fmt = int(num_val) if num_val.is_integer() else round(num_val, 1)
+            target_fmt = int(target) if target.is_integer() else target
+
+            status_color = AppColors.SUCCESS if is_done else AppColors.PRIMARY
+            badge_bg = AppColors.PRIMARY_LIGHT
+
+            self.content = ft.Container(
+                padding=ft.Padding.symmetric(horizontal=14, vertical=12),
+                content=ft.Column(
+                    spacing=8,
+                    controls=[
+                        ft.Row(
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            controls=[
+                                ft.Row(
+                                    spacing=8,
+                                    expand=True,
+                                    controls=[
+                                        ft.Icon(
+                                            ft.Icons.EMOJI_EVENTS if is_done else ft.Icons.FLAG_OUTLINED,
+                                            size=20,
+                                            color=status_color,
+                                        ),
+                                        ft.Text(
+                                            task_data["title"],
+                                            size=16,
+                                            weight=ft.FontWeight.W_600,
+                                            color=AppColors.TEXT_PRIMARY,
+                                            expand=True,
+                                        ),
+                                    ],
+                                ),
+                                ft.Container(
+                                    bgcolor=badge_bg,
+                                    padding=ft.Padding.symmetric(horizontal=10, vertical=4),
+                                    border_radius=12,
+                                    content=ft.Text(
+                                        f"{percent}%",
+                                        size=12,
+                                        weight=ft.FontWeight.W_600,
+                                        color=status_color,
+                                    ),
+                                ),
+                            ],
+                        ),
+                        ft.ProgressBar(
+                            value=progress,
+                            color=status_color,
+                            bgcolor=AppColors.DIVIDER,
+                            height=8,
+                            border_radius=4,
+                        ),
+                        ft.Row(
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            controls=[
+                                ft.Text(
+                                    f"Накоплено: {cur_fmt} / {target_fmt} {self.unit_name}".strip(),
+                                    size=13,
+                                    color=AppColors.TEXT_SECONDARY,
+                                ),
+                                ft.Text(
+                                    "Достигнуто" if is_done else "Автоподсчёт",
+                                    size=12,
+                                    color=status_color if is_done else AppColors.TEXT_SECONDARY,
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            )
+            return
+
+        # --- ОБЫЧНЫЙ РЕЖИМ ЗАДАЧИ (для вкладок "День" и "Неделя") ---
         self.checkbox = ft.Checkbox(
             value=is_done,
             active_color=AppColors.SUCCESS,
@@ -27,7 +107,6 @@ class ChecklistCard(ft.Card):
             on_change=self._handle_checkbox_change,
         )
 
-        # Название задачи (при выполнении немного приглушается)
         self.title_text = ft.Text(
             task_data["title"],
             size=16,
@@ -35,7 +114,6 @@ class ChecklistCard(ft.Card):
             color=AppColors.TEXT_SECONDARY if is_done else AppColors.TEXT_PRIMARY,
         )
 
-        # Подзаголовок с целью (если она задана)
         subtitle_controls: list[ft.Control] = [self.title_text]
         if self.has_numeric and self.target_value:
             target_fmt = int(self.target_value) if self.target_value.is_integer() else self.target_value
@@ -55,7 +133,6 @@ class ChecklistCard(ft.Card):
             ),
         ]
 
-        # Если включен числовой ввод — добавляем компактное поле справа
         self.number_field: ft.TextField | None = None
         if self.has_numeric:
             display_val = ""
@@ -126,7 +203,6 @@ class ChecklistCard(ft.Card):
 
     def _handle_number_change(self, e: ft.ControlEvent) -> None:
         num_val = self._parse_numeric_value()
-        # Автоматически ставим галочку, если введено значение > 0
         is_done = num_val > 0
         if self.checkbox.value != is_done:
             self.checkbox.value = is_done
