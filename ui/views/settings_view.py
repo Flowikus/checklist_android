@@ -18,8 +18,8 @@ class SettingsView(ft.Container):
             allow_multiple_selection=False,
             on_change=self._on_period_change,
             segments=[
-                ft.Segment(value=AppStrings.PERIOD_DAY, label=ft.Text(AppStrings.TAB_DAY)),
-                ft.Segment(value=AppStrings.PERIOD_WEEK, label=ft.Text(AppStrings.TAB_WEEK)),
+                ft.Segment(value=AppStrings.PERIOD_DAY, label=ft.Text("Каждый день")),
+                ft.Segment(value=AppStrings.PERIOD_WEEK, label=ft.Text("По дням")),
                 ft.Segment(value=AppStrings.PERIOD_MONTH, label=ft.Text(AppStrings.TAB_MONTH)),
                 ft.Segment(value=AppStrings.PERIOD_YEAR, label=ft.Text(AppStrings.TAB_YEAR)),
             ],
@@ -31,7 +31,7 @@ class SettingsView(ft.Container):
             expand=True,
         )
 
-        self.add_button_label = ft.Text("Добавить пункт", weight=ft.FontWeight.W_600)
+        self.add_button_label = ft.Text("Добавить задачу", weight=ft.FontWeight.W_600)
 
         add_button = ft.FilledButton(
             content=ft.Row(
@@ -69,7 +69,7 @@ class SettingsView(ft.Container):
 
     def _update_add_button_label(self) -> None:
         is_goal = self.selected_period in (AppStrings.PERIOD_MONTH, AppStrings.PERIOD_YEAR)
-        self.add_button_label.value = "Добавить цель" if is_goal else "Добавить пункт"
+        self.add_button_label.value = "Добавить цель" if is_goal else "Добавить задачу"
 
     def set_period(self, period_type: str) -> None:
         self.selected_period = period_type
@@ -87,6 +87,8 @@ class SettingsView(ft.Container):
         items = self.repo.get_all_items(period_type=self.selected_period, only_active=True)
         is_goal = self.selected_period in (AppStrings.PERIOD_MONTH, AppStrings.PERIOD_YEAR)
 
+        all_goals_map = {g["id"]: g["title"] for g in self.repo.get_numeric_goals()}
+
         if not items:
             self.tasks_column.controls.append(
                 ft.Container(
@@ -98,7 +100,7 @@ class SettingsView(ft.Container):
                                 color=AppColors.DIVIDER,
                             ),
                             ft.Text(
-                                "Целей для этого периода пока нет" if is_goal else "Список для этого периода пока пуст",
+                                "Целей для этого периода пока нет" if is_goal else "Задач для этого периода пока нет",
                                 size=15,
                                 color=AppColors.TEXT_SECONDARY,
                             ),
@@ -112,7 +114,7 @@ class SettingsView(ft.Container):
             )
         else:
             for item in items:
-                self.tasks_column.controls.append(self._build_task_card(item))
+                self.tasks_column.controls.append(self._build_task_card(item, all_goals_map))
 
         if should_update:
             try:
@@ -129,8 +131,9 @@ class SettingsView(ft.Container):
             return "Все дни"
         return ", ".join(AppStrings.DAYS_SHORT[n - 1] for n in sorted(nums) if 1 <= n <= 7)
 
-    def _build_task_card(self, item: dict[str, Any]) -> ft.Card:
+    def _build_task_card(self, item: dict[str, Any], goals_map: dict[int, str]) -> ft.Card:
         is_goal = item["period_type"] in (AppStrings.PERIOD_MONTH, AppStrings.PERIOD_YEAR)
+        g_type = item.get("goal_type") or "numeric"
         subtitle_parts = []
 
         if item["period_type"] == AppStrings.PERIOD_WEEK:
@@ -138,19 +141,29 @@ class SettingsView(ft.Container):
             subtitle_parts.append(f"[{days_text}]")
 
         if is_goal:
-            unit = item["unit_name"] or "ед."
-            target = item["target_value"] or 0
-            target_fmt = int(target) if float(target).is_integer() else target
-            subtitle_parts.append(f"Цель: {target_fmt} {unit} (автоподсчёт)")
-        elif item["has_numeric_input"]:
-            unit = item["unit_name"] or "ед."
-            if item["target_value"]:
-                target_fmt = int(item["target_value"]) if item["target_value"].is_integer() else item["target_value"]
-                subtitle_parts.append(f"Числовой ввод • Ориентир: {target_fmt} {unit}")
+            if g_type == "boolean":
+                subtitle_parts.append("Разовая цель (чек-бокс)")
             else:
-                subtitle_parts.append(f"Числовой ввод ({unit})")
+                unit = item["unit_name"] or "ед."
+                target = item["target_value"] or 0
+                target_fmt = int(target) if float(target).is_integer() else target
+                subtitle_parts.append(f"Накопительная цель: {target_fmt} {unit}")
         else:
-            subtitle_parts.append("Обычная отметка (чек-бокс)")
+            if item["has_numeric_input"]:
+                unit = item["unit_name"] or "ед."
+                subtitle_parts.append(f"Числовой ввод ({unit})")
+            else:
+                subtitle_parts.append("Чек-бокс")
+
+            linked_raw = item.get("linked_goal_ids")
+            if linked_raw:
+                linked_names = [
+                    goals_map[int(gid)]
+                    for gid in linked_raw.split(",")
+                    if gid.strip().isdigit() and int(gid.strip()) in goals_map
+                ]
+                if linked_names:
+                    subtitle_parts.append(f"→ {', '.join(linked_names)}")
 
         return ft.Card(
             content=ft.Container(
@@ -200,60 +213,106 @@ class SettingsView(ft.Container):
         is_edit = item is not None
         is_week = self.selected_period == AppStrings.PERIOD_WEEK
         is_goal = self.selected_period in (AppStrings.PERIOD_MONTH, AppStrings.PERIOD_YEAR)
-        selected_goal_key: str | None = item.get("goal_key") if is_edit else None
 
         title_field = ft.TextField(
-            label="Название цели (например, Чтение)" if is_goal else AppStrings.FIELD_TITLE_LABEL,
+            label="Название цели (например, Прочитать книгу)" if is_goal else AppStrings.FIELD_TITLE_LABEL,
             value=item["title"] if is_edit else "",
             border_radius=10,
         )
 
-        # --- ПОДСКАЗКИ ИЗ ЦЕЛЕЙ МЕСЯЦА/ГОДА (для вкладок "День" и "Неделя") ---
-        suggestions_section = ft.Column(visible=False, spacing=6)
-        if not is_goal:
-            suggestions = self.repo.get_active_goal_suggestions()
-            if suggestions:
-                chips: list[ft.Control] = []
+        # --- 1. ПЕРЕКЛЮЧАТЕЛЬ ТИПА ЦЕЛИ (только для "Месяц" и "Год") ---
+        current_goal_type = (item.get("goal_type") or "numeric") if is_edit else "numeric"
 
-                def apply_suggestion(s_data: dict[str, Any]) -> None:
-                    nonlocal selected_goal_key
-                    title_field.value = s_data["title"]
-                    selected_goal_key = s_data["goal_key"]
-                    numeric_checkbox.value = True
-                    numeric_fields_container.visible = True
-                    unit_field.value = s_data.get("unit_name") or ""
+        goal_type_selector = ft.SegmentedButton(
+            selected=[current_goal_type],
+            allow_multiple_selection=False,
+            segments=[
+                ft.Segment(value="numeric", label=ft.Text("С цифрами")),
+                ft.Segment(value="boolean", label=ft.Text("Чек-бокс")),
+            ],
+        )
+
+        goal_type_section = ft.Column(
+            visible=is_goal,
+            spacing=6,
+            controls=[
+                ft.Text(
+                    "Тип цели:",
+                    size=13,
+                    weight=ft.FontWeight.W_500,
+                    color=AppColors.TEXT_SECONDARY,
+                ),
+                goal_type_selector,
+            ],
+        )
+
+        # --- 2. ПРИВЯЗКА К НАКОПИТЕЛЬНЫМ ЦЕЛЯМ (только для "Каждый день" и "По дням") ---
+        selected_goal_ids: set[int] = set()
+        if is_edit and item.get("linked_goal_ids"):
+            for x in item["linked_goal_ids"].split(","):
+                if x.strip().isdigit():
+                    selected_goal_ids.add(int(x.strip()))
+
+        goal_link_section = ft.Column(visible=False, spacing=6)
+        goal_chips_map: dict[int, ft.Container] = {}
+
+        if not is_goal:
+            available_goals = self.repo.get_numeric_goals()
+            if available_goals:
+                chips_list: list[ft.Control] = []
+
+                def toggle_goal_link(goal_obj: dict[str, Any]) -> None:
+                    gid = goal_obj["id"]
+                    if gid in selected_goal_ids:
+                        selected_goal_ids.remove(gid)
+                    else:
+                        selected_goal_ids.add(gid)
+                        # Автоматически включаем числовой ввод и подставляем единицу измерения
+                        numeric_checkbox.value = True
+                        numeric_fields_container.visible = True
+                        if not (unit_field.value or "").strip() and goal_obj.get("unit_name"):
+                            unit_field.value = goal_obj["unit_name"]
+
+                    # Обновляем внешний вид чипов
+                    for chip_id, chip_ctrl in goal_chips_map.items():
+                        active = chip_id in selected_goal_ids
+                        chip_ctrl.bgcolor = AppColors.PRIMARY if active else AppColors.PRIMARY_LIGHT
+                        chip_ctrl.content.color = "#FFFFFF" if active else AppColors.PRIMARY
                     dialog.update()
 
-                for s in suggestions:
-                    unit_hint = f" ({s['unit_name']})" if s.get("unit_name") else ""
-                    chips.append(
-                        ft.Container(
-                            content=ft.Text(
-                                f"{s['title']}{unit_hint}",
-                                size=12,
-                                weight=ft.FontWeight.W_600,
-                                color=AppColors.PRIMARY,
-                            ),
-                            bgcolor=AppColors.PRIMARY_LIGHT,
-                            padding=ft.Padding.symmetric(horizontal=10, vertical=6),
-                            border_radius=16,
-                            ink=True,
-                            on_click=lambda e, data=s: apply_suggestion(data),
-                        )
+                for g in available_goals:
+                    gid = g["id"]
+                    active = gid in selected_goal_ids
+                    period_tag = "Месяц" if g["period_type"] == "month" else "Год"
+                    unit_tag = f", {g['unit_name']}" if g.get("unit_name") else ""
+                    chip = ft.Container(
+                        content=ft.Text(
+                            f"{g['title']} ({period_tag}{unit_tag})",
+                            size=12,
+                            weight=ft.FontWeight.W_600,
+                            color="#FFFFFF" if active else AppColors.PRIMARY,
+                        ),
+                        bgcolor=AppColors.PRIMARY if active else AppColors.PRIMARY_LIGHT,
+                        padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+                        border_radius=16,
+                        ink=True,
+                        on_click=lambda e, obj=g: toggle_goal_link(obj),
                     )
+                    goal_chips_map[gid] = chip
+                    chips_list.append(chip)
 
-                suggestions_section.visible = True
-                suggestions_section.controls = [
+                goal_link_section.visible = True
+                goal_link_section.controls = [
                     ft.Text(
-                        "Подсказки из ваших целей (нажмите, чтобы связать):",
+                        "Суммировать результат в цели (можно выбрать несколько):",
                         size=12,
                         weight=ft.FontWeight.W_500,
                         color=AppColors.TEXT_SECONDARY,
                     ),
-                    ft.Row(controls=chips, wrap=True, spacing=6, run_spacing=6),
+                    ft.Row(controls=chips_list, wrap=True, spacing=6, run_spacing=6),
                 ]
 
-        # --- ВЫБОР ДНЕЙ НЕДЕЛИ (только для вкладки "Неделя") ---
+        # --- 3. ВЫБОР ДНЕЙ НЕДЕЛИ (только для "По дням") ---
         initial_days = list(range(1, 8))
         if is_edit and item.get("days_of_week"):
             initial_days = [int(x) for x in item["days_of_week"].split(",") if x.isdigit()]
@@ -272,8 +331,7 @@ class SettingsView(ft.Container):
                 days_selector,
             ],
         )
-
-        # --- ПОЛЯ ЕДИНИЦЫ ИЗМЕРЕНИЯ И ЦЕЛИ ---
+        # --- 4. ПОЛЯ ЕДИНИЦЫ ИЗМЕРЕНИЯ И ЦЕЛИ ---
         unit_field = ft.TextField(
             label=AppStrings.FIELD_UNIT_LABEL,
             value=item["unit_name"] or "" if is_edit else "",
@@ -291,23 +349,41 @@ class SettingsView(ft.Container):
             border_radius=10,
         )
 
+        initial_numeric_visible = (
+            (current_goal_type == "numeric")
+            if is_goal
+            else (bool(item["has_numeric_input"]) if is_edit else False)
+        )
+
         numeric_fields_container = ft.Column(
             controls=[unit_field, target_field],
             spacing=12,
-            visible=True if is_goal else (bool(item["has_numeric_input"]) if is_edit else False),
+            visible=initial_numeric_visible,
         )
+
+        def on_goal_type_change(e: ft.ControlEvent) -> None:
+            if e.control.selected:
+                chosen = next(iter(e.control.selected))
+                numeric_fields_container.visible = (chosen == "numeric")
+                dialog.update()
+
+        goal_type_selector.on_change = on_goal_type_change
 
         def on_numeric_toggle(e: ft.ControlEvent) -> None:
             numeric_fields_container.visible = bool(e.control.value)
             dialog.update()
 
         numeric_checkbox = ft.Checkbox(
-            value=True if is_goal else (bool(item["has_numeric_input"]) if is_edit else False),
+            value=initial_numeric_visible,
             active_color=AppColors.PRIMARY,
             on_change=on_numeric_toggle,
         )
 
-        # Текст чек-бокса в отдельной колонке с expand=True, чтобы не уезжал за край экрана
+        def _toggle_checkbox_by_text() -> None:
+            numeric_checkbox.value = not bool(numeric_checkbox.value)
+            numeric_fields_container.visible = bool(numeric_checkbox.value)
+            dialog.update()
+
         checkbox_row = ft.Row(
             visible=not is_goal,
             spacing=6,
@@ -327,10 +403,6 @@ class SettingsView(ft.Container):
             ],
         )
 
-        def _toggle_checkbox_by_text() -> None:
-            numeric_checkbox.value = not bool(numeric_checkbox.value)
-            numeric_fields_container.visible = bool(numeric_checkbox.value)
-            dialog.update()
         def handle_save(e: ft.ControlEvent) -> None:
             title_val = (title_field.value or "").strip()
             if not title_val:
@@ -338,7 +410,13 @@ class SettingsView(ft.Container):
                 dialog.update()
                 return
 
-            has_num = True if is_goal else bool(numeric_checkbox.value)
+            chosen_goal_type = (
+                next(iter(goal_type_selector.selected))
+                if (is_goal and goal_type_selector.selected)
+                else "numeric"
+            )
+
+            has_num = (chosen_goal_type == "numeric") if is_goal else bool(numeric_checkbox.value)
             unit_val = (unit_field.value or "").strip() if has_num else None
             target_val: float | None = None
 
@@ -350,13 +428,17 @@ class SettingsView(ft.Container):
                     dialog.update()
                     return
 
-            if is_goal and (target_val is None or target_val <= 0):
+            if is_goal and chosen_goal_type == "numeric" and (target_val is None or target_val <= 0):
                 target_field.error_text = "Укажите целевое значение больше 0"
                 dialog.update()
                 return
 
             days_str = days_selector.get_selected_days_str() if is_week else None
-            final_goal_key = selected_goal_key or title_val.lower()
+            linked_str = (
+                ",".join(str(gid) for gid in sorted(selected_goal_ids))
+                if (not is_goal and selected_goal_ids)
+                else None
+            )
 
             if is_edit:
                 self.repo.update_checklist_item(
@@ -367,7 +449,8 @@ class SettingsView(ft.Container):
                     unit_name=unit_val,
                     target_value=target_val,
                     days_of_week=days_str,
-                    goal_key=final_goal_key,
+                    goal_type=chosen_goal_type,
+                    linked_goal_ids=linked_str,
                 )
             else:
                 self.repo.create_checklist_item(
@@ -377,13 +460,13 @@ class SettingsView(ft.Container):
                     unit_name=unit_val,
                     target_value=target_val,
                     days_of_week=days_str,
-                    goal_key=final_goal_key,
+                    goal_type=chosen_goal_type,
+                    linked_goal_ids=linked_str,
                 )
 
             self.app_page.pop_dialog()
             self.load_tasks()
 
-        # Кнопки перенесены внутрь прокручиваемой области, чтобы не перекрывать поля при открытии клавиатуры
         buttons_row = ft.Row(
             alignment=ft.MainAxisAlignment.END,
             spacing=8,
@@ -403,9 +486,9 @@ class SettingsView(ft.Container):
         dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text(
-                ("Редактировать цель" if is_goal else "Редактировать пункт")
+                ("Редактировать цель" if is_goal else "Редактировать задачу")
                 if is_edit
-                else ("Новая цель" if is_goal else AppStrings.ADD_TASK_TITLE),
+                else ("Новая цель" if is_goal else "Новая задача"),
                 size=18,
                 weight=ft.FontWeight.BOLD,
                 color=AppColors.TEXT_PRIMARY,
@@ -417,9 +500,10 @@ class SettingsView(ft.Container):
                     scroll=ft.ScrollMode.AUTO,
                     spacing=12,
                     controls=[
-                        suggestions_section,
                         title_field,
+                        goal_type_section,
                         days_section,
+                        goal_link_section,
                         checkbox_row,
                         numeric_fields_container,
                         ft.Container(content=buttons_row, padding=ft.Padding.only(top=6)),
@@ -433,7 +517,6 @@ class SettingsView(ft.Container):
         self.app_page.show_dialog(dialog)
 
     def _confirm_delete(self, item_id: int) -> None:
-        """Запрашивает подтверждение перед удалением задачи (в цветах индиго, без красного)."""
         def do_delete(e: ft.ControlEvent) -> None:
             self.repo.delete_checklist_item(item_id)
             self.app_page.pop_dialog()

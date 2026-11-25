@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from core.constants.strings import AppStrings
 from core.database.repository import ChecklistRepository
 
@@ -8,7 +8,6 @@ class PeriodHelper:
 
     @classmethod
     def get_current_period_id(cls, period_type: str, dt: datetime | None = None) -> str:
-        """Возвращает уникальный код текущего периода для записи в БД."""
         now = dt or datetime.now()
         if period_type == cls.PERIOD_DAY:
             return now.strftime("%Y-%m-%d")
@@ -27,9 +26,16 @@ class PeriodHelper:
         now = dt or datetime.now()
         return now.isoweekday()
 
+    @staticmethod
+    def get_date_for_weekday_in_current_week(target_weekday: int, dt: datetime | None = None) -> datetime:
+        """Возвращает объект datetime для выбранного дня (1..7) текущей недели."""
+        now = dt or datetime.now()
+        current_weekday = now.isoweekday()
+        delta_days = target_weekday - current_weekday
+        return now + timedelta(days=delta_days)
+
     @classmethod
     def get_period_display_name(cls, period_type: str, dt: datetime | None = None) -> str:
-        """Возвращает человекочитаемый заголовок периода для экрана."""
         now = dt or datetime.now()
         months_ru = [
             "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
@@ -43,7 +49,8 @@ class PeriodHelper:
 
         if period_type == cls.PERIOD_DAY:
             day_name = days_short_ru[now.weekday()]
-            return f"Сегодня, {now.day} {months_genitive_ru[now.month - 1]} ({day_name})"
+            prefix = "Сегодня, " if now.date() == datetime.now().date() else ""
+            return f"{prefix}{now.day} {months_genitive_ru[now.month - 1]} ({day_name})"
         elif period_type == AppStrings.PERIOD_WEEK:
             _, iso_week, _ = now.isocalendar()
             return f"Неделя №{iso_week} ({now.year})"
@@ -55,7 +62,6 @@ class PeriodHelper:
 
     @staticmethod
     def get_period_label_nominative(period_type: str) -> str:
-        """Название периода для текста диалога обновления."""
         mapping = {
             AppStrings.PERIOD_WEEK: "новая неделя",
             AppStrings.PERIOD_MONTH: "новый месяц",
@@ -65,18 +71,11 @@ class PeriodHelper:
 
     @classmethod
     def check_periods_needing_renewal(cls, repo: ChecklistRepository) -> list[str]:
-        """
-        Проверяет периоды:
-        - Для 'day': обновляет состояние тихо (без диалогового окна).
-        - Для 'week', 'month', 'year': при смене периода и наличии задач возвращает их для диалога.
-        """
-        # 1. Тихое обновление ежедневного чек-листа
         current_day_id = cls.get_current_period_id(cls.PERIOD_DAY)
         last_day = repo.get_last_prompted_period(cls.PERIOD_DAY)
         if last_day != current_day_id:
             repo.set_last_prompted_period(cls.PERIOD_DAY, current_day_id)
 
-        # 2. Проверка периодов, требующих подтверждения через AlertDialog
         periods_to_prompt: list[str] = []
         prompt_periods = [
             AppStrings.PERIOD_WEEK,

@@ -26,7 +26,7 @@ class DatabaseManager:
         return conn
 
     def init_db(self) -> None:
-        """Создает таблицы при первом запуске или безопасно мигрирует старую БД."""
+        """Создает таблицы при первом запуске или безопасно мигрирует старую БД до v4."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
@@ -36,38 +36,64 @@ class DatabaseManager:
             table_exists = cursor.fetchone() is not None
 
             if not table_exists:
-                self._create_v3_tables(cursor)
+                self._create_v4_tables(cursor)
             else:
                 cursor.execute("PRAGMA table_info(checklists);")
                 columns = [row["name"] for row in cursor.fetchall()]
 
+                # Если база совсем старая (v1)
                 if "days_of_week" not in columns:
-                    self._migrate_v1_to_v2(cursor)
-
-                # Миграция до v3: добавляем колонку goal_key для связи задач с целями месяца/года
-                cursor.execute("PRAGMA table_info(checklists);")
-                columns = [row["name"] for row in cursor.fetchall()]
-                if "goal_key" not in columns:
-                    cursor.execute("ALTER TABLE checklists ADD COLUMN goal_key TEXT;")
-                    # Заполняем goal_key для уже существующих записей по их названию
-                    cursor.execute("SELECT id, title FROM checklists;")
-                    for row in cursor.fetchall():
-                        norm_key = (row["title"] or "").strip().lower()
+                    self._migrate_v1_to_v4(cursor)
+                else:
+                    # Миграция с v2/v3 до v4
+                    if "goal_type" not in columns:
                         cursor.execute(
-                            "UPDATE checklists SET goal_key = ? WHERE id = ?;",
-                            (norm_key, row["id"]),
+                            "ALTER TABLE checklists ADD COLUMN goal_type TEXT NOT NULL DEFAULT 'numeric';"
                         )
+                    if "linked_goal_ids" not in columns:
+                        cursor.execute(
+                            "ALTER TABLE checklists ADD COLUMN linked_goal_ids TEXT;"
+                        )
+                        # Переносим старые связи по goal_key в прямые ID целей
+                        if "goal_key" in columns:
+                            self._migrate_goal_keys_to_ids(cursor)
 
             conn.commit()
 
-    def _create_v3_tables(self, cursor: sqlite3.Cursor) -> None:
+    def _migrate_goal_keys_to_ids(self, cursor: sqlite3.Cursor) -> None:
+        """Связывает существующие дневные/недельные задачи с целями месяца/года по старому goal_key."""
+        cursor.execute(
+            "SELECT id, goal_key FROM checklists WHERE period_type IN ('month', 'year') AND is_active = 1;"
+        )
+        goals = cursor.fetchall()
+        key_to_ids: dict[str, list[str]] = {}
+        for g in goals:
+            g_key = (g["goal_key"] or "").strip().lower()
+            if g_key:
+                key_to_ids.setdefault(g_key, []).append(str(g["id"]))
+
+        cursor.execute(
+            "SELECT id, goal_key FROM checklists WHERE period_type IN ('day', 'week');"
+        )
+        tasks = cursor.fetchall()
+        for t in tasks:
+            t_key = (t["goal_key"] or "").strip().lower()
+            if t_key and t_key in key_to_ids:
+                linked_str = ",".join(key_to_ids[t_key])
+                cursor.execute(
+                    "UPDATE checklists SET linked_goal_ids = ? WHERE id = ?;",
+                    (linked_str, t["id"]),
+                )
+
+    def _create_v4_tables(self, cursor: sqlite3.Cursor) -> None:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS checklists (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL,
-                goal_key TEXT,
                 period_type TEXT NOT NULL CHECK(period_type IN ('day', 'week', 'month', 'year')),
                 days_of_week TEXT,
+                goal_type TEXT NOT NULL DEFAULT 'numeric',
+                linked_goal_ids TEXT,
                 has_numeric_input INTEGER NOT NULL DEFAULT 0,
                 unit_name TEXT,
                 target_value REAL,
@@ -97,26 +123,27 @@ class DatabaseManager:
             );
         """)
 
-    def _migrate_v1_to_v2(self, cursor: sqlite3.Cursor) -> None:
+    def _migrate_v1_to_v4(self, cursor: sqlite3.Cursor) -> None:
         cursor.execute("PRAGMA foreign_keys = OFF;")
 
         cursor.execute("ALTER TABLE checklists RENAME TO checklists_old;")
         cursor.execute("ALTER TABLE checklist_logs RENAME TO checklist_logs_old;")
         cursor.execute("ALTER TABLE period_states RENAME TO period_states_old;")
 
-        self._create_v3_tables(cursor)
+        self._create_v4_tables(cursor)
 
         cursor.execute("""
             INSERT INTO checklists (
-                id, title, goal_key, period_type, days_of_week, has_numeric_input,
-                unit_name, target_value, is_active, created_at
+                id, title, period_type, days_of_week, goal_type, linked_goal_ids,
+                has_numeric_input, unit_name, target_value, is_active, created_at
             )
             SELECT
                 id,
                 title,
-                LOWER(TRIM(title)),
                 period_type,
                 CASE WHEN period_type = 'week' THEN '1,2,3,4,5,6,7' ELSE NULL END,
+                'numeric',
+                NULL,
                 has_numeric_input,
                 unit_name,
                 target_value,

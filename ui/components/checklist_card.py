@@ -11,16 +11,51 @@ class ChecklistCard(ft.Card):
     ):
         super().__init__()
         self.task_id: int = task_data["id"]
-        self.has_numeric: bool = bool(task_data["has_numeric_input"])
-        self.unit_name: str = task_data["unit_name"] or ""
-        self.target_value: float | None = task_data["target_value"]
+        self.has_numeric: bool = bool(task_data.get("has_numeric_input", False))
+        self.unit_name: str = task_data.get("unit_name") or ""
+        self.target_value: float | None = task_data.get("target_value")
         self.on_progress_changed = on_progress_changed
+        self.number_field: ft.TextField | None = None
 
         is_done = bool(task_data["is_completed"])
-        num_val = float(task_data["numeric_value"] or 0.0)
+        num_val = float(task_data.get("numeric_value") or 0.0)
         is_goal_card = bool(task_data.get("is_goal_card", False))
+        goal_type = task_data.get("goal_type") or "numeric"
 
-        # --- РЕЖИМ ЦЕЛИ (для вкладок "Месяц" и "Год") ---
+        # --- РЕЖИМ 1: РАЗОВАЯ ЦЕЛЬ-ЧЕКБОКС ("Прочитать книгу", "Освоить навык") ---
+        if is_goal_card and goal_type == "boolean":
+            self.checkbox = ft.Checkbox(
+                value=is_done,
+                active_color=AppColors.SUCCESS,
+                check_color="#FFFFFF",
+                on_change=self._handle_checkbox_change,
+            )
+            self.title_text = ft.Text(
+                task_data["title"],
+                size=15,
+                weight=ft.FontWeight.W_600,
+                color=AppColors.TEXT_SECONDARY if is_done else AppColors.TEXT_PRIMARY,
+                expand=True,
+            )
+            self.content = ft.Container(
+                padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+                content=ft.Row(
+                    spacing=8,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    controls=[
+                        self.checkbox,
+                        ft.Icon(
+                            ft.Icons.EMOJI_EVENTS if is_done else ft.Icons.FLAG_OUTLINED,
+                            size=18,
+                            color=AppColors.SUCCESS if is_done else AppColors.PRIMARY,
+                        ),
+                        self.title_text,
+                    ],
+                ),
+            )
+            return
+
+        # --- РЕЖИМ 2: НАКОПИТЕЛЬНАЯ ЦЕЛЬ С ПРОГРЕСС-БАРОМ ---
         if is_goal_card:
             target = float(self.target_value or 0.0)
             progress = min(num_val / target, 1.0) if target > 0 else 0.0
@@ -30,12 +65,11 @@ class ChecklistCard(ft.Card):
             target_fmt = int(target) if target.is_integer() else target
 
             status_color = AppColors.SUCCESS if is_done else AppColors.PRIMARY
-            badge_bg = AppColors.PRIMARY_LIGHT
 
             self.content = ft.Container(
-                padding=ft.Padding.symmetric(horizontal=14, vertical=12),
+                padding=ft.Padding.symmetric(horizontal=14, vertical=10),
                 content=ft.Column(
-                    spacing=8,
+                    spacing=6,
                     controls=[
                         ft.Row(
                             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -47,12 +81,12 @@ class ChecklistCard(ft.Card):
                                     controls=[
                                         ft.Icon(
                                             ft.Icons.EMOJI_EVENTS if is_done else ft.Icons.FLAG_OUTLINED,
-                                            size=20,
+                                            size=18,
                                             color=status_color,
                                         ),
                                         ft.Text(
                                             task_data["title"],
-                                            size=16,
+                                            size=15,
                                             weight=ft.FontWeight.W_600,
                                             color=AppColors.TEXT_PRIMARY,
                                             expand=True,
@@ -60,8 +94,8 @@ class ChecklistCard(ft.Card):
                                     ],
                                 ),
                                 ft.Container(
-                                    bgcolor=badge_bg,
-                                    padding=ft.Padding.symmetric(horizontal=10, vertical=4),
+                                    bgcolor=AppColors.PRIMARY_LIGHT,
+                                    padding=ft.Padding.symmetric(horizontal=8, vertical=3),
                                     border_radius=12,
                                     content=ft.Text(
                                         f"{percent}%",
@@ -76,30 +110,20 @@ class ChecklistCard(ft.Card):
                             value=progress,
                             color=status_color,
                             bgcolor=AppColors.DIVIDER,
-                            height=8,
+                            height=7,
                             border_radius=4,
                         ),
-                        ft.Row(
-                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                            controls=[
-                                ft.Text(
-                                    f"Накоплено: {cur_fmt} / {target_fmt} {self.unit_name}".strip(),
-                                    size=13,
-                                    color=AppColors.TEXT_SECONDARY,
-                                ),
-                                ft.Text(
-                                    "Достигнуто" if is_done else "Автоподсчёт",
-                                    size=12,
-                                    color=status_color if is_done else AppColors.TEXT_SECONDARY,
-                                ),
-                            ],
+                        ft.Text(
+                            f"Накоплено: {cur_fmt} / {target_fmt} {self.unit_name}".strip(),
+                            size=12,
+                            color=AppColors.TEXT_SECONDARY,
                         ),
                     ],
                 ),
             )
             return
 
-        # --- ОБЫЧНЫЙ РЕЖИМ ЗАДАЧИ (для вкладок "День" и "Неделя") ---
+        # --- РЕЖИМ 3: ЗАДАЧА НА СЕГОДНЯ ("День" или "Неделя") ---
         self.checkbox = ft.Checkbox(
             value=is_done,
             active_color=AppColors.SUCCESS,
@@ -115,14 +139,23 @@ class ChecklistCard(ft.Card):
         )
 
         subtitle_controls: list[ft.Control] = [self.title_text]
+        sub_hints: list[str] = []
+
         if self.has_numeric and self.target_value:
             target_fmt = int(self.target_value) if self.target_value.is_integer() else self.target_value
-            self.target_label = ft.Text(
-                f"Цель: {target_fmt} {self.unit_name}".strip(),
-                size=12,
-                color=AppColors.TEXT_SECONDARY,
+            sub_hints.append(f"Ориентир: {target_fmt} {self.unit_name}".strip())
+
+        if task_data.get("linked_goal_ids"):
+            sub_hints.append("Связано с целью")
+
+        if sub_hints:
+            subtitle_controls.append(
+                ft.Text(
+                    " • ".join(sub_hints),
+                    size=12,
+                    color=AppColors.TEXT_SECONDARY,
+                )
             )
-            subtitle_controls.append(self.target_label)
 
         row_controls: list[ft.Control] = [
             self.checkbox,
