@@ -13,17 +13,24 @@ class SettingsView(ft.Container):
         self.repo = repo
         self.selected_period = initial_period
 
-        self.period_selector = ft.SegmentedButton(
-            selected=[self.selected_period],
-            allow_multiple_selection=False,
-            on_change=self._on_period_change,
-            segments=[
-                ft.Segment(value=AppStrings.PERIOD_DAY, label=ft.Text("Каждый день")),
-                ft.Segment(value=AppStrings.PERIOD_WEEK, label=ft.Text("По дням")),
-                ft.Segment(value=AppStrings.PERIOD_MONTH, label=ft.Text(AppStrings.TAB_MONTH)),
-                ft.Segment(value=AppStrings.PERIOD_YEAR, label=ft.Text(AppStrings.TAB_YEAR)),
+        self.period_selector = ft.Dropdown(
+            value=self.selected_period,
+            label="Раздел задач / целей",
+            border_radius=12,
+            bgcolor=AppColors.CARD_BG,
+            border_color=AppColors.DIVIDER,
+            focused_border_color=AppColors.PRIMARY,
+            content_padding=ft.Padding.symmetric(horizontal=14, vertical=10),
+            expand=True,
+            on_select=self._on_period_change,
+            options=[
+                ft.DropdownOption(key=AppStrings.PERIOD_DAY, text="Ежедневные задачи (Каждый день)"),
+                ft.DropdownOption(key=AppStrings.PERIOD_WEEK, text="Задачи по дням недели (Пн–Вс)"),
+                ft.DropdownOption(key=AppStrings.PERIOD_MONTH, text="Цели на месяц"),
+                ft.DropdownOption(key=AppStrings.PERIOD_YEAR, text="Цели на год"),
             ],
         )
+
 
         self.tasks_column = ft.Column(
             spacing=10,
@@ -56,7 +63,7 @@ class SettingsView(ft.Container):
                     weight=ft.FontWeight.BOLD,
                     color=AppColors.TEXT_PRIMARY,
                 ),
-                ft.Container(content=self.period_selector, alignment=ft.Alignment.CENTER),
+                ft.Row(controls=[self.period_selector]),
                 self.tasks_column,
                 ft.Container(content=add_button, padding=ft.Padding.only(bottom=12, top=4)),
             ],
@@ -73,15 +80,16 @@ class SettingsView(ft.Container):
 
     def set_period(self, period_type: str) -> None:
         self.selected_period = period_type
-        self.period_selector.selected = [period_type]
+        self.period_selector.value = period_type
         self._update_add_button_label()
         self.load_tasks()
 
     def _on_period_change(self, e: ft.ControlEvent) -> None:
-        if e.control.selected:
-            self.selected_period = next(iter(e.control.selected))
+        if e.control.value:
+            self.selected_period = e.control.value
             self._update_add_button_label()
             self.load_tasks()
+
     def load_tasks(self, should_update: bool = True) -> None:
         self.tasks_column.controls.clear()
         items = self.repo.get_all_items(period_type=self.selected_period, only_active=True)
