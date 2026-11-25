@@ -9,8 +9,9 @@ dependencies = [
 ]
 
 [tool.flet]
-org = "com.example"
+org = "com.Flowi"
 product = "Чек-листы"
+assets_dir = "assets"
 company = "Flowi Team"
 copyright = "2026"
 
