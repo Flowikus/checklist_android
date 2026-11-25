@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from core.database.db_manager import DatabaseManager
 from core.constants.plant_config import PlantConfig
@@ -572,6 +572,34 @@ class ChecklistRepository:
             conn.commit()
 
         return coins_delta
+
+    def get_current_week_daily_stats(self) -> list[dict[str, Any]]:
+        """Возвращает процент выполнения задач по каждому дню текущей недели (Пн..Вс)."""
+        today = datetime.now()
+        monday = today - timedelta(days=today.isoweekday() - 1)
+        days_labels = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+
+        stats: list[dict[str, Any]] = []
+        for idx in range(7):
+            day_dt = monday + timedelta(days=idx)
+            date_str = day_dt.strftime("%Y-%m-%d")
+            weekday_num = idx + 1
+
+            tasks = self.get_tasks_for_date(date_str, weekday_num)
+            total = len(tasks)
+            completed = sum(1 for t in tasks if t["is_completed"] == 1)
+            percent = round((completed / total) * 100) if total > 0 else 0
+
+            stats.append({
+                "day_label": days_labels[idx],
+                "total": total,
+                "completed": completed,
+                "percent": percent,
+                "is_today": (day_dt.date() == today.date()),
+            })
+
+        return stats
+
     # --- РАСТЕНИЕ И ЭКОНОМИКА ---
 
     def get_plant_state(self) -> dict[str, Any]:
